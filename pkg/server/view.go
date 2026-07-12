@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"kapo/pkg/game"
+	"el-kapo/pkg/game"
 )
 
 // CardFace is the presentational decomposition of a card for the felt table:

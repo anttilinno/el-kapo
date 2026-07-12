@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"kapo/pkg/ai"
-	"kapo/pkg/game"
+	"el-kapo/pkg/ai"
+	"el-kapo/pkg/game"
 )
 
 // TablePhase is the table-level state machine, one level above game.Phase

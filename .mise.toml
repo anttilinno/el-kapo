@@ -2,20 +2,20 @@
 go = "1.25"
 
 [tasks.build]
-description = "Build the kapo binary"
-run = "go build -o kapo ./cmd/kapo"
+description = "Build the el-kapo binary"
+run = "go build -o el-kapo ./cmd/el-kapo"
 
 [tasks.dev]
-description = "Build and run kapo"
-run = "go run ./cmd/kapo"
+description = "Build and run el-kapo"
+run = "go run ./cmd/el-kapo"
 
 [tasks.build-web]
-description = "Build the kapo-web binary"
-run = "go build -o kapo-web ./cmd/kapo-web"
+description = "Build the el-kapo-web binary"
+run = "go build -o el-kapo-web ./cmd/el-kapo-web"
 
 [tasks.web]
-description = "Build and run kapo-web"
-run = "go run ./cmd/kapo-web"
+description = "Build and run el-kapo-web"
+run = "go run ./cmd/el-kapo-web"
 
 [tasks.test]
 description = "Run tests"
@@ -23,4 +23,4 @@ run = "go test ./..."
 
 [tasks.clean]
 description = "Remove build artifacts"
-run = "rm -f kapo kapo-web"
+run = "rm -f el-kapo el-kapo-web"

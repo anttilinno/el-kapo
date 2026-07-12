@@ -4,7 +4,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"kapo/pkg/game"
+	"el-kapo/pkg/game"
 )
 
 // The reported bug: holding 4,4,5 with a 4 on the discard, the AI multi-swapped

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"kapo/pkg/game"
+	"el-kapo/pkg/game"
 )
 
 // TestInfoLeak is the important one: a viewer's rendered board must never

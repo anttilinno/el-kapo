@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"kapo/pkg/game"
+	"el-kapo/pkg/game"
 )
 
 // TestSimFullRounds drives many full 1-human/1-bot rounds with a random but

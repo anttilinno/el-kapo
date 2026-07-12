@@ -6,7 +6,7 @@ import (
 	"math/rand"
 	"strings"
 
-	"kapo/pkg/game"
+	"el-kapo/pkg/game"
 )
 
 // Tuning knobs for the heuristic.

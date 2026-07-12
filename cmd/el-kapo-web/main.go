@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"os"
 
-	"kapo/pkg/server"
+	"el-kapo/pkg/server"
 )
 
 func main() {

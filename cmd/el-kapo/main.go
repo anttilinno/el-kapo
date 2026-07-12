@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"kapo/pkg/ai"
-	"kapo/pkg/game"
+	"el-kapo/pkg/ai"
+	"el-kapo/pkg/game"
 )
 
 func main() {
