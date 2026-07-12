@@ -1,0 +1,657 @@
+{{define "scripts"}}
+<script src="/static/htmx.min.js"></script>
+<script src="/static/sse.js"></script>
+<script>
+// One-verb interaction, no confirm step. Two orders, both commit on the
+// second click:
+//   source-first: click the drawn/discard card (arms it), then click an own
+//     slot -> swaps that one card immediately.
+//   targets-first: click own slots with nothing armed (each toggles .picked),
+//     then click the drawn/discard card -> commits all picks as the
+//     multiswap-* action (server API unchanged).
+// State lives in these vars + DOM classes and is wiped whenever the board
+// re-renders (SSE push), keeping the old "clears on re-render" contract.
+let src = null;   // armed source: { action, url, multi }
+let picks = [];   // chosen own-slot indices (strings), in tap order
+
+function armSource(el) {
+  src = { action: el.dataset.action, url: el.dataset.url, multi: el.dataset.multi };
+  document.querySelectorAll('.armable').forEach(a => a.classList.remove('armed-src'));
+  el.classList.add('armed-src');
+  clearPicks();
+}
+function resolveTarget(slotEl) {
+  const slot = slotEl.dataset.slot;
+  const i = picks.indexOf(slot);
+  if (i >= 0) picks.splice(i, 1); else picks.push(slot);
+  slotEl.classList.toggle('picked');
+  if (src) commitSwap(); // source already armed -> this click commits
+}
+function commitSwap() {
+  if (!src || !picks.length) return;
+  if (picks.length === 1) postMove(src.url, { action: src.action, slot: picks[0] });
+  else postMove(src.url, { action: src.multi, slots: picks });
+  resetInteraction();
+}
+function commitDiscard(disc) { postMove(disc.dataset.url, { action: 'discard' }); resetInteraction(); }
+function clearPicks() {
+  picks = [];
+  document.querySelectorAll('.card.selectable.picked').forEach(c => c.classList.remove('picked'));
+}
+function resetInteraction() { src = null; clearPicks(); }
+function postMove(url, fields) {
+  const body = new URLSearchParams();
+  for (const [k, v] of Object.entries(fields)) {
+    if (Array.isArray(v)) v.forEach(x => body.append(k, x));
+    else body.set(k, v);
+  }
+  fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
+}
+
+// Click flow: discard pile throws the drawn card; an armable arms the source
+// (or, with slots already picked, commits them); an own slot picks/commits.
+document.addEventListener('click', function (e) {
+  const disc = e.target.closest('.discard-target');
+  if (disc) { commitDiscard(disc); return; }
+  const armEl = e.target.closest('.armable');
+  if (armEl) {
+    if (picks.length) { // targets-first: this click commits the picked slots
+      src = { action: armEl.dataset.action, url: armEl.dataset.url, multi: armEl.dataset.multi };
+      commitSwap();
+    } else armSource(armEl);
+    return;
+  }
+  const slotEl = e.target.closest('.card.selectable');
+  if (slotEl) { resolveTarget(slotEl); return; }
+});
+
+// Drag mirrors the click flow through the same armSource/resolveTarget: drag
+// the source onto a slot to swap immediately, or onto the discard pile to
+// throw it away. draggable is stamped on mousedown since re-renders wipe it.
+document.addEventListener('mousedown', function (e) {
+  const c = e.target.closest('.armable .card');
+  if (c) c.setAttribute('draggable', 'true');
+});
+document.addEventListener('dragstart', function (e) {
+  const armEl = e.target.closest ? e.target.closest('.armable') : null;
+  if (!armEl) return;
+  armSource(armEl);
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', src.action);
+  document.documentElement.classList.add('dragging'); // lights up the drop-target rings
+});
+document.addEventListener('dragend', clearDragOver);
+document.addEventListener('dragover', function (e) {
+  if (!src) return;
+  const t = e.target.closest('.card.selectable, .discard-target');
+  if (t) { e.preventDefault(); t.classList.add('drag-over'); }
+});
+document.addEventListener('dragleave', function (e) {
+  const t = e.target.closest ? e.target.closest('.card.selectable, .discard-target') : null;
+  if (t) t.classList.remove('drag-over');
+});
+document.addEventListener('drop', function (e) {
+  if (!src) return;
+  const slotEl = e.target.closest('.card.selectable');
+  if (slotEl) { e.preventDefault(); resolveTarget(slotEl); }
+  else { const disc = e.target.closest('.discard-target'); if (disc && src.action === 'swap') { e.preventDefault(); commitDiscard(disc); } }
+  clearDragOver();
+});
+function clearDragOver() {
+  document.documentElement.classList.remove('dragging');
+  document.querySelectorAll('.drag-over').forEach(x => x.classList.remove('drag-over'));
+}
+
+// A board re-render (SSE push) swaps in fresh DOM; drop any half-built move so
+// a stale source or picks can't post against the new state.
+document.addEventListener('htmx:afterSwap', resetInteraction);
+
+// ---- Onboarding: 3 in-game beats + permanent cheat sheet -----------------
+// Beats are first-match-only coach chips, each gated by its own localStorage
+// flag (client-side only, no server state). runBeats() re-checks the board's
+// data-phase/data-myphase hints on every render and fires at most one beat.
+// The "?" cheat chip is permanent; the powers beat just pulses it once.
+function beatSeen(k) { return localStorage.getItem('kapo-hint-' + k) === '1'; }
+function markBeat(k) { localStorage.setItem('kapo-hint-' + k, '1'); }
+function showCoach(text) {
+  dismissCoach();
+  const c = document.createElement('div');
+  c.id = 'coach'; c.className = 'coach';
+  c.innerHTML = '<span></span><button type="button" class="coach-x">Got it</button>';
+  c.querySelector('span').textContent = text; // text, not HTML - guard against injection
+  document.body.appendChild(c);
+}
+function dismissCoach() { const c = document.getElementById('coach'); if (c) c.remove(); }
+function runBeats() {
+  const b = document.querySelector('.board-inner');
+  if (!b) return;
+  const phase = b.dataset.phase, myphase = b.dataset.myphase, myturn = b.dataset.myturn === '1';
+  if (phase === 'peeking' && !beatSeen('peek')) {
+    showCoach('Tap 2 of your cards to memorize them.'); markBeat('peek'); return;
+  }
+  if (phase === 'playing' && myturn && myphase === 'turnstart' && !beatSeen('firstturn')) {
+    showCoach('Lowest hand total wins. Take a card from either pile.'); markBeat('firstturn'); return;
+  }
+  if (b.querySelector('.power-preview') && !beatSeen('powers')) {
+    const btn = document.getElementById('cheat-btn'); if (btn) btn.classList.add('pulse-once');
+    showCoach('Some cards have powers — tap the ? anytime for the cheat sheet.'); markBeat('powers');
+  }
+}
+document.addEventListener('click', function (e) {
+  if (e.target.closest('.coach-x')) { dismissCoach(); return; }
+  const panel = document.getElementById('cheat-panel');
+  if (e.target.closest('#cheat-btn')) {
+    panel.classList.toggle('open');
+    document.getElementById('cheat-btn').classList.remove('pulse-once');
+    return;
+  }
+  if (e.target.closest('#cheat-close')) { panel.classList.remove('open'); return; }
+});
+document.addEventListener('htmx:afterSwap', runBeats);
+runBeats();
+
+// ---- Motion pass: section 5 animations ---------------------------------
+// The board re-renders wholesale on every SSE push, so a plain CSS entry
+// animation would replay on every move. Instead we remember the previous
+// render's phase/kapo state and stamp a trigger class only on the transition
+// that owns each animation. All classes go inert under prefers-reduced-motion
+// (CSS below) and the count-up is skipped there too.
+// ponytail: swap/take is a "settle" pop, not a literal source->target arc -
+// true arcs need per-card ids from BoardView (out of scope: no engine change).
+const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+let mPhase = null, mMyPhase = null, mKapo = false, revealed = new Set();
+// reveal-eligible = publicly face-up cards always, plus your own faces during
+// the setup peek. Keyed by seat+card index so a card that merely stays face-up
+// across renders isn't re-flipped.
+function revealCards(b, phase) {
+  const out = [];
+  b.querySelectorAll('.seat').forEach((seat, si) => {
+    const mine = seat.classList.contains('me');
+    seat.querySelectorAll('.hand .card').forEach((c, ci) => {
+      if (c.classList.contains('faceup') || (phase === 'peeking' && mine && c.classList.contains('face')))
+        out.push(['s' + si + 'c' + ci, c]);
+    });
+  });
+  return out;
+}
+function countUpTotals(b) {
+  b.querySelectorAll('.totals td').forEach(td => {
+    const m = td.textContent.match(/^(\d+)\s*pts$/);
+    if (!m) return;
+    const end = +m[1], t0 = performance.now();
+    (function step(t) {
+      const p = Math.min(1, (t - t0) / 300);
+      td.textContent = Math.round(end * p) + ' pts';
+      if (p < 1) requestAnimationFrame(step);
+    })(t0);
+  });
+}
+function runMotion() {
+  const b = document.querySelector('.board-inner');
+  if (!b) { mPhase = mMyPhase = null; mKapo = false; revealed = new Set(); return; }
+  const phase = b.dataset.phase, myphase = b.dataset.myphase, kapo = b.dataset.kapo === '1';
+  const felt = b.querySelector('.felt');
+  const dealing = phase === 'peeking' && mPhase !== 'peeking';   // cards land at the setup peek
+  const revealing = phase === 'roundover' && mPhase !== 'roundover';
+
+  if (felt && dealing) felt.classList.add('dealing');            // fly-in stagger
+  if (felt && revealing) felt.classList.add('revealing');        // sequenced flip-up
+
+  // Draw: deck top slides into the drawn slot and flips face-up.
+  if (myphase === 'drawn' && mMyPhase !== 'drawn') {
+    const d = b.querySelector('.armable[data-action="swap"] .card');
+    if (d) d.classList.add('just-drawn');
+  }
+  // Swap/take resolved: the drawn card left its slot - pop what settled.
+  if (mMyPhase === 'drawn' && myphase !== 'drawn') {
+    b.querySelectorAll('.pos-me .hand .card, .center-strip .pile:last-child .card')
+      .forEach(c => c.classList.add('settle'));
+  }
+  // Kapo called: banner drops into the header, felt rail flashes once.
+  if (kapo && !mKapo) {
+    const banner = b.querySelector('.kapo-banner');
+    if (banner) banner.classList.add('kapo-drop');
+    if (felt) felt.classList.add('kapo-flash');
+  }
+  // Peek / power reveals flip newly face-up cards. Deal and round-over own
+  // their own reveals, so only re-seed the set on those renders.
+  if (!dealing && !revealing) {
+    const cur = revealCards(b, phase);
+    cur.forEach(([k, c]) => { if (!revealed.has(k)) c.classList.add('flip-in'); });
+    revealed = new Set(cur.map(x => x[0]));
+  } else {
+    revealed = new Set(revealCards(b, phase).map(x => x[0]));
+  }
+  if (revealing && !reduceMotion) countUpTotals(b);
+
+  mPhase = phase; mMyPhase = myphase; mKapo = kapo;
+}
+document.addEventListener('htmx:afterSwap', runMotion);
+runMotion();
+</script>
+{{end}}
+
+{{define "styles"}}
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Marcellus&display=swap');
+  /* ---- Casino card-table theme ---------------------------------------
+     Deep green felt under a near-black, gold-trimmed frame. Display type
+     (KAPO lettermark, nameplates, buttons, numerals) is Marcellus, a wide
+     humanist titling serif; card faces stay on Georgia; body copy on the
+     system UI stack. --display drives the former, --serif the card faces. */
+  :root {
+    --felt-1:#1d5c3a; --felt-2:#123f28; --felt-3:#092417;
+    --gold:#d3af5e; --gold-bright:#f2d894; --gold-dim:#8a7327;
+    --red:#b3402a; --ink:#1a1a1a; --ivory:#f7f3e8;
+    --line:#2c5a41; --burgundy:#6d1b20;
+    --serif: Georgia, "Palatino Linotype", "Book Antiqua", "Times New Roman", serif;
+    --display: "Marcellus", Georgia, "Times New Roman", serif;
+    /* Card size scales with the viewport; every card metric derives from
+       --card-w so the whole card grows as one. Own hand runs larger. */
+    --card-w: clamp(3.2rem, 5.5vw, 5.4rem);
+    --card-w-me: clamp(4rem, 7.5vw, 7rem);
+  }
+
+  * { box-sizing:border-box; }
+  body {
+    font-family:system-ui, sans-serif; color:#e8ead0; margin:0;
+    padding:1.5rem 1rem 3rem; min-height:100vh;
+    background:radial-gradient(circle at 50% 0%, #14110c 0%, #0a0c0a 55%, #050605 100%);
+  }
+  .page { max-width:1320px; margin:0 auto; }
+  a { color:var(--gold-bright); }
+
+  /* KAPO lettermark: serif, uppercased, widely tracked, gilded. */
+  h1 {
+    font-family:var(--display); text-transform:uppercase; letter-spacing:.32em;
+    font-weight:600; font-size:2.4rem; text-align:center; color:var(--gold);
+    margin:.2rem 0 1.2rem; text-indent:.32em; /* balance the trailing track */
+    text-shadow:0 1px 0 #000, 0 0 18px rgba(212,175,55,.35);
+  }
+  h3 { font-family:var(--display); color:var(--gold); letter-spacing:.04em; text-align:center; }
+
+  /* ---- Board header: round marker, Kapo banner, score chips ---------- */
+  .board-head { display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap; margin-bottom:1rem; }
+  .round-info { display:flex; align-items:center; gap:.8rem; flex-wrap:wrap; }
+  .round-num { font-family:var(--display); font-size:1.3rem; color:var(--gold); letter-spacing:.08em; }
+  .kapo-banner {
+    display:inline-block; background:linear-gradient(#7c1f1a,#5a1512); color:var(--gold-bright);
+    border:1px solid var(--gold); border-radius:6px; padding:.15rem .6rem;
+    font-family:var(--display); letter-spacing:.06em; font-weight:700;
+    box-shadow:0 0 14px rgba(212,175,55,.4);
+  }
+  .mode-tag {
+    display:inline-block; background:linear-gradient(#7c1f1a,#5a1512); color:#ffd9d0;
+    border:1px solid #a33; border-radius:6px; padding:.15rem .55rem;
+    font-size:.65rem; text-transform:uppercase; letter-spacing:.12em; font-weight:700;
+  }
+  fieldset.difficulty { border:1px solid var(--gold-dim); border-radius:8px; margin:.8rem 0; padding:.5rem .8rem .7rem; }
+  fieldset.difficulty legend { font-family:var(--display); color:var(--gold); font-size:.85rem; letter-spacing:.06em; padding:0 .4rem; }
+  fieldset.difficulty label { display:block; margin:.3rem 0; font-size:.9rem; cursor:pointer; }
+  .chips { display:flex; flex-wrap:wrap; gap:.6rem; }
+  .chip {
+    width:3.4rem; height:3.4rem; border-radius:50%; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; text-align:center;
+    background:radial-gradient(circle at 50% 35%, #2a6b46, #12331f);
+    border:2px dashed var(--gold); box-shadow:0 2px 6px rgba(0,0,0,.5);
+  }
+  .chip-score { font-family:var(--display); font-weight:700; color:var(--gold-bright); font-size:1.1rem; line-height:1; }
+  .chip-name { font-size:.5rem; text-transform:uppercase; letter-spacing:.03em; color:#cfe3d4;
+    max-width:3rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  /* ---- The felt --------------------------------------------------------
+     Radial green with an inset vignette and a hairline gold rail. */
+  /* Rectangular seating grid: viewer at the bottom, opponents wrapping
+     left -> top -> right in turn order. Side seats stack their cards
+     vertically (see .pos-left/.pos-right .hand below). */
+  .felt {
+    position:relative; border-radius:16px; padding:1.4rem 1.4rem 1.6rem;
+    background:radial-gradient(ellipse 120% 90% at 50% 42%, var(--felt-1) 0%, var(--felt-2) 48%, var(--felt-3) 100%);
+    border:1px solid #05170e;
+    box-shadow: inset 0 0 60px rgba(0,0,0,.55), inset 0 0 0 2px rgba(212,175,55,.25), 0 12px 40px rgba(0,0,0,.6);
+    display:grid; gap:1rem; align-items:center; justify-items:center;
+    grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);
+    grid-template-areas:
+      ". top ."
+      "left center right"
+      ". me .";
+  }
+  .pos-top { grid-area:top; }
+  .pos-left { grid-area:left; }
+  .pos-right { grid-area:right; }
+  .pos-me { grid-area:me; }
+  .center-strip { grid-area:center; }
+  .pos-left .hand, .pos-right .hand { flex-direction:column; align-items:center; }
+
+  /* ---- A seat: nameplate pill above a fanned hand -------------------- */
+  .seat { text-align:center; padding:.5rem .7rem .7rem; border-radius:12px;
+    background:rgba(0,0,0,.18); border:1px solid transparent; }
+  .seat.me { background:rgba(0,0,0,.28); }
+  .seat.current { border-color:var(--gold); background:rgba(0,0,0,.28);
+    box-shadow:0 0 0 1px var(--gold), 0 0 18px rgba(255,209,102,.35); }
+  .nameplate {
+    display:inline-flex; align-items:center; gap:.4rem; margin:0 auto .5rem;
+    background:#0b1a12; border:1px solid var(--line); border-radius:999px;
+    padding:.2rem .7rem; font-size:.85rem;
+  }
+  .seat.current .nameplate { border-color:var(--gold); color:var(--gold-bright); box-shadow:0 0 10px rgba(255,209,102,.3); }
+  .pname { font-family:var(--display); color:#eef2e0; letter-spacing:.02em; }
+  .tag { font-size:.6rem; text-transform:uppercase; letter-spacing:.06em; font-weight:700;
+    background:var(--gold-dim); color:#12130a; padding:.05rem .3rem; border-radius:3px; }
+  .tag.joined { background:#2a6b46; color:#eaffef; }
+  .tag.waiting { background:#3a2f10; color:var(--gold-bright); }
+  .turn-dot { color:var(--gold-bright); font-size:.7rem; }
+  .hand { display:flex; gap:.4rem; justify-content:center; }
+
+  /* ---- Buttons: felt-dark with a gold rail; primary/danger variants -- */
+  button, input[type=submit] {
+    cursor:pointer; font-family:var(--display); letter-spacing:.03em; font-size:.9rem;
+    background:linear-gradient(#123322,#0c2418); color:#f0e6c8;
+    border:1px solid var(--gold-dim); border-radius:6px; padding:.5rem 1rem;
+    box-shadow:0 2px 5px rgba(0,0,0,.4); transition:box-shadow .12s, border-color .12s, color .12s;
+  }
+  button:hover, input[type=submit]:hover { border-color:var(--gold); color:#fff; box-shadow:0 0 12px rgba(212,175,55,.4); }
+  button:disabled { opacity:.45; cursor:not-allowed; box-shadow:none; }
+  .btn-primary { background:linear-gradient(#d9b84a,#b8912f); color:#1a1405; border-color:var(--gold-bright); font-weight:700; }
+  .btn-primary:hover { color:#000; box-shadow:0 0 16px rgba(255,209,102,.6); }
+  .btn-danger { background:linear-gradient(#7c1f1a,#5a1512); color:#ffeede; border-color:#b5432f; }
+  .btn-danger:hover { box-shadow:0 0 14px rgba(192,57,43,.6); }
+
+  /* ---- Playing cards ---------------------------------------------------
+     2.5:3.5 ivory faces; hearts/diamonds red, jokers a violet star tile;
+     ornate burgundy backs framed in gold. */
+  .card {
+    position:relative; width:var(--card-w); height:calc(var(--card-w) * 1.4);
+    border-radius:calc(var(--card-w) * .12);
+    display:inline-flex; align-items:center; justify-content:center;
+    font-family:var(--serif); box-shadow:0 3px 6px rgba(0,0,0,.45); user-select:none;
+  }
+  button.card { padding:0; }
+  .card.face { background:linear-gradient(160deg,#fdfbf3,#efe8d4); color:var(--ink); border:1px solid #cabf9c; }
+  .card.face.red { color:var(--red); }
+  .crank { position:absolute; font-size:calc(var(--card-w) * .26); font-weight:700; line-height:1; }
+  .crank.tl { top:calc(var(--card-w) * .065); left:calc(var(--card-w) * .1); }
+  .crank.br { bottom:calc(var(--card-w) * .065); right:calc(var(--card-w) * .1); transform:rotate(180deg); }
+  .cpip { font-size:calc(var(--card-w) * .55); line-height:1; }
+  .card.joker { flex-direction:column; gap:.15rem; color:var(--gold-bright);
+    background:linear-gradient(160deg,#2c1442,#5a2d82); border:1px solid var(--gold-dim); }
+  .joker-star { font-size:calc(var(--card-w) * .44); }
+  .joker-name { font-size:calc(var(--card-w) * .15); letter-spacing:.12em; }
+
+  .card.back { color:transparent; border:1px solid #2c0508;
+    background:repeating-linear-gradient(45deg,#6d1b20 0 7px,#54121a 7px 14px); }
+  .card.back::before { content:""; position:absolute; inset:calc(var(--card-w) * .08);
+    border:1.5px solid rgba(212,175,55,.85); border-radius:calc(var(--card-w) * .075); }
+  .card.back::after { content:"✦"; position:absolute; inset:0; display:flex; align-items:center;
+    justify-content:center; color:rgba(212,175,55,.75); font-size:calc(var(--card-w) * .37); }
+  .card.empty-slot { background:rgba(0,0,0,.25); border:2px dashed rgba(212,175,55,.4); box-shadow:none; }
+
+  /* Publicly face-up cards glow gold; the armed swap-source glows blue. */
+  .card.faceup { box-shadow:0 0 0 2px var(--gold), 0 0 12px rgba(255,209,102,.5); }
+  .card.armed  { box-shadow:0 0 0 2px #6ab0ff, 0 0 12px rgba(106,176,255,.6); }
+
+  /* Target slots: hover lifts slightly, a picked slot lifts fully with a gold
+     halo (clicking the drawn/discard card commits all picks as a multiswap). */
+  .card.selectable { cursor:pointer; transition:transform .12s, box-shadow .12s; }
+  .card.selectable:hover { transform:translateY(-4px); box-shadow:0 8px 14px rgba(0,0,0,.5); }
+  .card.picked { transform:translateY(-10px);
+    box-shadow:0 0 0 2px var(--gold-bright), 0 10px 18px rgba(0,0,0,.55), 0 0 16px rgba(255,209,102,.6); }
+
+  /* Armable center-strip cards (drawn/discard): click to arm, then click an
+     own slot to swap directly. */
+  .armable { display:inline-block; }
+  .armable .card { cursor:pointer; transition:transform .12s, box-shadow .12s; }
+  .armable .card:hover { transform:translateY(-3px); box-shadow:0 8px 14px rgba(0,0,0,.5); }
+  .armable.armed-src .card { transform:translateY(-5px);
+    box-shadow:0 0 0 2px var(--gold-bright), 0 8px 16px rgba(0,0,0,.55), 0 0 16px rgba(255,209,102,.6); }
+
+  /* Discard pile as a drop target while deciding on a drawn card: dashed
+     gold invitation, click discards. */
+  .discard-target { display:inline-block; }
+  .discard-target .card { cursor:pointer; transition:transform .12s, box-shadow .12s; }
+  .discard-target .card:hover { transform:translateY(-3px);
+    box-shadow:0 8px 14px rgba(0,0,0,.5), 0 0 14px rgba(255,209,102,.45); }
+
+  /* ---- Move hints: one animation, lift-pulse, on legal sources only -----
+     Section 4 glow discipline: the ONLY looping animation on the felt is
+     lift-pulse, riding the legal sources for the current move - the drawn/
+     discard cards you can pick up (.armable) plus the deck when it's a fresh
+     draw (.legal-src). All of those render only on your turn, so nothing
+     pulses off-turn. Outline (not box-shadow) so it never fights the stacked-
+     deck shadow or the faceup/armed glows. */
+  @keyframes lift-pulse {
+    0%, 100% { transform:translateY(0);    outline-color:rgba(242,216,148,.15); }
+    50%      { transform:translateY(-4px); outline-color:rgba(242,216,148,.85); }
+  }
+  .armable .card, .card.legal-src {
+    outline:2px solid rgba(242,216,148,.15); outline-offset:2px;
+    animation:lift-pulse 1.8s ease-in-out infinite;
+  }
+  /* Drop targets get a plain dashed ring only while a source is dragged; the
+     discard drop zone keeps that quiet dashed marker whenever it's a target. */
+  html.dragging .card.selectable { outline:2px dashed rgba(242,216,148,.6); outline-offset:2px; }
+  .discard-target .card { outline:2px dashed rgba(212,175,55,.45); outline-offset:2px; }
+  /* An armed/picked source stops pulsing - its lift + glow says it all. */
+  .card.picked, .armable.armed-src .card { animation:none; outline:none; }
+
+  /* Drag & drop: armable cards can be picked up; a hovered drop target
+     brightens and lifts to invite the release. */
+  .armable .card { cursor:grab; }
+  .card.selectable.drag-over { transform:translateY(-8px) scale(1.04);
+    box-shadow:0 0 0 3px var(--gold-bright), 0 10px 18px rgba(0,0,0,.55), 0 0 20px rgba(255,209,102,.7);
+    animation:none; outline:none; }
+  .discard-target.drag-over .card { transform:translateY(-4px);
+    box-shadow:0 0 0 3px var(--gold-bright), 0 0 20px rgba(255,209,102,.7);
+    animation:none; outline:none; }
+
+  /* Own hand runs larger: every card metric derives from --card-w, so one
+     variable override scales the whole card. */
+  .pos-me .card { --card-w: var(--card-w-me); }
+
+  /* ---- Center strip: deck stack + discard pile ---------------------- */
+  .center-strip { display:flex; gap:2.5rem; justify-content:center; align-items:flex-start; padding:.4rem 0; }
+  .pile { display:flex; flex-direction:column; align-items:center; gap:.4rem; }
+  .pile-label { font-size:.65rem; text-transform:uppercase; letter-spacing:.12em; color:#bcd6c3; }
+  .deck-stack { position:relative; }
+  .deck-stack[hx-post] { cursor:pointer; }
+  .deck-stack .deck-card { box-shadow:3px 3px 0 -1px #4a0b10, 6px 6px 0 -2px #3a080d, 0 4px 8px rgba(0,0,0,.5); }
+  .deck-card::after { display:none; } /* count sits here instead of the ornament */
+  .pile-count { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    font-family:var(--display); font-weight:700; color:var(--gold-bright); font-size:1.1rem;
+    text-shadow:0 1px 3px #000; z-index:1; }
+
+  /* Kapo coin: a burgundy casino chip on the felt, replaces the old button.
+     Sits in the center strip only when calling Kapo is legal. */
+  .kapo-coin {
+    width:3.6rem; height:calc(var(--card-w) * 1.4); border:none; background:none;
+    box-shadow:none; padding:0; display:flex; align-items:center; justify-content:center;
+  }
+  .kapo-coin .coin {
+    width:3.6rem; height:3.6rem; border-radius:50%; display:flex; align-items:center;
+    justify-content:center; font-family:var(--display); font-weight:700; font-size:.72rem;
+    letter-spacing:.1em; color:var(--gold-bright);
+    background:radial-gradient(circle at 50% 35%, #7c1f1a, #4a0e0b);
+    border:2px dashed var(--gold); box-shadow:0 3px 8px rgba(0,0,0,.5);
+    transition:transform .12s, box-shadow .12s;
+  }
+  .kapo-coin:hover { box-shadow:none; }
+  .kapo-coin:hover .coin { transform:translateY(-3px); box-shadow:0 0 16px rgba(192,57,43,.7); }
+
+  /* ---- Turn helpers, You pill, toasts ------------------------------- */
+  .board-inner p { text-align:center; }
+  .controls { display:flex; gap:.6rem; flex-wrap:wrap; justify-content:center; margin:.7rem 0; }
+
+  /* You pill: single contextual hint + known-total chip, sits under the felt. */
+  .you-pill { display:flex; align-items:center; justify-content:center; gap:.9rem; flex-wrap:wrap;
+    max-width:fit-content; margin:.7rem auto; padding:.4rem 1rem; border-radius:999px;
+    background:linear-gradient(#12331f,#0b2013); border:1px solid var(--gold-dim);
+    box-shadow:0 4px 14px rgba(0,0,0,.4); }
+  .you-hint { color:#eef2e0; font-size:.9rem; }
+  .you-total { color:var(--gold-bright); font-family:var(--display); font-weight:700; font-size:.95rem;
+    cursor:help; border-left:1px solid var(--gold-dim); padding-left:.9rem; }
+  .you-pill .you-total:first-child { border-left:none; padding-left:0; }
+  .hidden-count { color:#9fb7a6; font-family:system-ui, sans-serif; font-weight:400; font-size:.75rem; }
+
+  /* Power preview: label on the discard target while a card is drawn. */
+  .power-preview { display:block; margin-top:.25rem; color:#ffce8a; font-size:.72rem;
+    max-width:8rem; text-align:center; line-height:1.2; }
+
+  /* Seen (👁) badge: own cards the viewer knows, easy-mode memory aid. */
+  .pos-me .card.seen::after { content:"\1F441"; position:absolute; top:-.35rem; right:-.35rem;
+    font-size:.7rem; line-height:1; filter:drop-shadow(0 1px 1px rgba(0,0,0,.7)); }
+
+  /* Toast: transient status/error, replaces inline flash prose. */
+  .toast {
+    position:fixed; left:50%; bottom:2rem; transform:translateX(-50%); z-index:20;
+    text-align:center; color:#ffce8a; font-weight:600; font-size:.9rem;
+    background:#3a2408; border:1px solid #c9822e; border-radius:8px; padding:.45rem .9rem;
+    box-shadow:0 6px 20px rgba(0,0,0,.5); animation:toast-fade 4s ease forwards;
+  }
+  @keyframes toast-fade {
+    0%,80% { opacity:1; } 100% { opacity:0; visibility:hidden; }
+  }
+
+  /* ---- Onboarding: coach chip + permanent cheat sheet ---------------- */
+  /* Coach chip: first-match hint, top-center, dismissed with "Got it". */
+  .coach { position:fixed; top:1rem; left:50%; transform:translateX(-50%); z-index:30;
+    display:flex; align-items:center; gap:.8rem; max-width:min(90vw,26rem);
+    padding:.55rem .9rem; border-radius:999px;
+    background:linear-gradient(#3a2408,#241503); border:1px solid var(--gold);
+    box-shadow:0 6px 22px rgba(0,0,0,.6); }
+  .coach span { color:#ffe6b8; font-size:.9rem; }
+  .coach .coach-x { padding:.25rem .7rem; font-size:.78rem; }
+
+  /* "?" chip: permanent, bottom-left; pulses once when the powers beat fires. */
+  #cheat-btn { position:fixed; left:1rem; bottom:1.5rem; z-index:25;
+    width:2.6rem; height:2.6rem; border-radius:50%; padding:0; font-size:1.3rem;
+    display:flex; align-items:center; justify-content:center; }
+  #cheat-btn.pulse-once { animation:cheat-pulse 1.4s ease-in-out 3; }
+  @keyframes cheat-pulse {
+    0%,100% { box-shadow:0 2px 5px rgba(0,0,0,.4); }
+    50%     { box-shadow:0 0 0 3px var(--gold-bright), 0 0 18px rgba(255,209,102,.7); }
+  }
+  #cheat-panel { position:fixed; left:1rem; bottom:4.6rem; z-index:25; display:none;
+    width:min(90vw,20rem); padding:1rem 1.2rem; border-radius:12px;
+    background:linear-gradient(160deg,#12331f,#0a2013); border:1px solid var(--gold-dim);
+    box-shadow:0 10px 30px rgba(0,0,0,.6); }
+  #cheat-panel.open { display:block; }
+  .cheat-head { display:flex; align-items:center; justify-content:space-between;
+    font-family:var(--display); color:var(--gold); letter-spacing:.06em; margin-bottom:.5rem; }
+  .cheat-head button { padding:.1rem .5rem; font-size:1rem; line-height:1; }
+  .cheat-list { margin:0; display:grid; grid-template-columns:auto 1fr; gap:.3rem .8rem; }
+  .cheat-list dt { font-family:var(--display); color:var(--gold-bright); font-size:.9rem; white-space:nowrap; }
+  .cheat-list dd { margin:0; color:#dfe8da; font-size:.82rem; }
+
+  /* ---- Round-over reveal -------------------------------------------- */
+  .totals { margin:.6rem auto; border-collapse:collapse; }
+  .totals td { padding:.3rem 1.1rem; border-bottom:1px solid var(--line); }
+  .totals .win { color:var(--gold-bright); font-weight:700; }
+
+  /* ---- Motion pass (section 5) --------------------------------------
+     Trigger classes are stamped by runMotion() on the transition that owns
+     each moment (see base.html JS). All animations are <=300ms except the
+     peek flip; every one goes inert under prefers-reduced-motion below. */
+  @keyframes deal-in    { from { opacity:0; transform:translateY(-140px) scale(.7); } to { opacity:1; transform:none; } }
+  @keyframes draw-in    { from { opacity:.2; transform:translateX(-70px) rotateY(90deg); } to { opacity:1; transform:none; } }
+  @keyframes settle-pop { from { transform:scale(1.14); } to { transform:none; } }
+  @keyframes peek-flip  { 0% { opacity:.3; transform:perspective(500px) rotateY(88deg); } 100% { opacity:1; transform:perspective(500px) rotateY(0); } }
+  @keyframes reveal-flip{ from { transform:perspective(500px) rotateY(90deg); } to { transform:perspective(500px) rotateY(0); } }
+  @keyframes banner-drop{ from { opacity:0; transform:translateY(-160%); } to { opacity:1; transform:none; } }
+  @keyframes rail-flash { 0%,100% { outline-color:rgba(242,216,148,0); } 50% { outline-color:var(--gold-bright); } }
+
+  /* Deal: cards fly from the center down to each seat, 40ms stagger. */
+  .felt.dealing .hand .card { animation:deal-in .26s ease-out both; }
+  .felt.dealing .hand .card:nth-child(2) { animation-delay:.04s; }
+  .felt.dealing .hand .card:nth-child(3) { animation-delay:.08s; }
+  .felt.dealing .hand .card:nth-child(4) { animation-delay:.12s; }
+  .felt.dealing .hand .card:nth-child(5) { animation-delay:.16s; }
+  .felt.dealing .hand .card:nth-child(6) { animation-delay:.2s; }
+  /* Round over: every hand flips up in sequence. */
+  .felt.revealing .hand .card { animation:reveal-flip .3s ease both; }
+  .felt.revealing .hand .card:nth-child(2) { animation-delay:.06s; }
+  .felt.revealing .hand .card:nth-child(3) { animation-delay:.12s; }
+  .felt.revealing .hand .card:nth-child(4) { animation-delay:.18s; }
+  .felt.revealing .hand .card:nth-child(5) { animation-delay:.24s; }
+  .felt.revealing .hand .card:nth-child(6) { animation-delay:.3s; }
+  .card.just-drawn { animation:draw-in .2s ease-out both; z-index:2; }
+  .card.settle { animation:settle-pop .2s ease-out; }
+  .card.flip-in { animation:peek-flip 1.5s ease; z-index:2; }   /* peek exempt from the 300ms cap */
+  .kapo-banner.kapo-drop { animation:banner-drop .3s cubic-bezier(.2,1.2,.4,1) both; }
+  .felt.kapo-flash { outline:2px solid rgba(242,216,148,0); outline-offset:4px; animation:rail-flash .3s ease; }
+
+  /* ---- Standalone panels: lobby / join / full / lobby-wait ---------- */
+  .panel {
+    max-width:30rem; margin:1.5rem auto; padding:1.6rem 1.8rem; border-radius:14px;
+    background:linear-gradient(160deg,#12331f,#0a2013); border:1px solid var(--gold-dim);
+    box-shadow: inset 0 0 40px rgba(0,0,0,.4), 0 0 0 1px rgba(212,175,55,.15), 0 14px 40px rgba(0,0,0,.6);
+  }
+  .panel p { margin:.6rem 0; }
+  label { font-size:.9rem; color:#cfe0d3; }
+  input:not([type=submit]) { font-family:system-ui, sans-serif; background:#0b1a12; color:#eef2e0;
+    border:1px solid var(--line); border-radius:6px; padding:.4rem .5rem; margin-top:.25rem; }
+  .seatlist { list-style:none; padding:0; margin:.4rem 0; }
+  .seatlist li { padding:.3rem 0; border-bottom:1px solid var(--line); }
+  code { background:#081209; border:1px solid var(--line); color:var(--gold-bright);
+    padding:.2rem .45rem; border-radius:5px; word-break:break-all; }
+
+  /* ---- Lobby: the live seats screen --------------------------------- */
+  .lobby { max-width:34rem; margin:1.5rem auto; display:flex; flex-direction:column; gap:1.2rem; }
+  .lobby-code { display:flex; flex-wrap:wrap; align-items:center; gap:.6rem 1rem;
+    padding:1rem 1.2rem; border-radius:12px;
+    background:linear-gradient(#12331f,#0b2013); border:1px solid var(--gold-dim); }
+  .lobby-code-label { font-family:var(--display); font-size:.7rem; text-transform:uppercase;
+    letter-spacing:.1em; color:var(--gold); width:100%; }
+  .table-code { font-family:var(--display); font-size:2.4rem; letter-spacing:.15em;
+    color:var(--gold-bright); text-shadow:0 0 18px rgba(255,209,102,.35); }
+  .copy-invite { margin-left:auto; }
+  .seats { display:flex; flex-direction:column; gap:.5rem; }
+  .seat-row { display:flex; align-items:center; gap:.6rem; padding:.6rem .9rem;
+    border-radius:10px; background:rgba(0,0,0,.22); border:1px solid var(--line); }
+  .seat-row.empty { border-style:dashed; border-color:var(--gold-dim); background:rgba(0,0,0,.1); }
+  .seat-name { font-family:var(--display); color:#eef2e0; letter-spacing:.02em; }
+  .seat-name.muted { color:#6f7d70; }
+  .seat-wait { font-size:.8rem; color:#8a7327; }
+  .btn-add-bot { margin-left:auto; padding:.35rem .8rem; font-size:.8rem; }
+  .difficulty-seg { display:flex; flex-direction:column; gap:.5rem; }
+  .seg-label { font-family:var(--display); font-size:.7rem; text-transform:uppercase;
+    letter-spacing:.1em; color:var(--gold); }
+  .segmented { display:inline-flex; align-self:flex-start; border:1px solid var(--gold-dim);
+    border-radius:8px; overflow:hidden; }
+  .segmented > button, .segmented > span { padding:.45rem 1.4rem; border:none; border-radius:0;
+    box-shadow:none; background:transparent; color:#cfe0d3; font-family:var(--display);
+    letter-spacing:.08em; }
+  .segmented > button + button, .segmented > span + span { border-left:1px solid var(--gold-dim); }
+  .segmented .active { background:linear-gradient(#d9b84a,#b8912f); color:#1a1405; font-weight:700; }
+  .segmented.readonly > span { cursor:default; }
+  .consequence { margin:0; font-size:.85rem; color:#cfe0d3; }
+  .helper { margin:.4rem 0 0; font-size:.85rem; color:#8a7327; }
+
+  /* ---- Admin sidebar (restyled to theme) ----------------------------
+     Anchored bottom-right so it never overlaps the score chips in the
+     board header at narrow viewports. */
+  .sidebar { position:fixed; bottom:1.5rem; right:1rem; display:flex; flex-direction:column;
+    gap:.5rem; width:8.5rem; padding:.7rem; border-radius:10px;
+    background:linear-gradient(#12331f,#0b2013); border:1px solid var(--gold-dim);
+    box-shadow:0 6px 20px rgba(0,0,0,.5); }
+  .sidebar-title { font-family:var(--display); font-size:.7rem; text-transform:uppercase; letter-spacing:.1em; color:var(--gold); }
+  .sidebar button { width:100%; }
+
+  /* ---- Accessibility floor ------------------------------------------ */
+  button:focus-visible, .card.selectable:focus-visible, a:focus-visible, input:focus-visible {
+    outline:2px solid var(--gold-bright); outline-offset:2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .card.selectable { transition:none; }
+    /* No looping lift-pulse; legal sources keep a solid static gold ring. */
+    .armable .card, .card.legal-src {
+      animation:none; transform:none; outline-color:rgba(242,216,148,.7);
+    }
+    #cheat-btn.pulse-once { animation:none;
+      box-shadow:0 0 0 3px var(--gold-bright), 0 0 18px rgba(255,209,102,.7); }
+    /* Motion pass: every triggered animation goes inert, end-state visible. */
+    .felt.dealing .hand .card, .felt.revealing .hand .card,
+    .card.just-drawn, .card.settle, .card.flip-in,
+    .kapo-banner.kapo-drop, .felt.kapo-flash { animation:none; }
+  }
+</style>
+{{end}}

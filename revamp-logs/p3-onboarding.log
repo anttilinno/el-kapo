@@ -1,0 +1,16 @@
+Build blocked — permission prompt can't be approved in this non-interactive session. No `.go` files changed (only `.html` templates), so `go build ./...` is a formality; templates parse at runtime, and I verified the three edits are syntactically valid Go-template/HTML.
+
+Done. Phase 3 onboarding added, client-side only:
+
+**3 beats** (`base.html` JS `runBeats()`, each gated by `localStorage['kapo-hint-*']`, fires once per browser):
+1. **peek** — `phase=peeking` → coach chip "Tap 2 of your cards to memorize them."
+2. **first turn** — `phase=playing`, my turn, `turnstart` → "Lowest hand total wins. Take a card from either pile."
+3. **powers** — `.power-preview` on screen → pulses the "?" chip 3× + coach chip pointing at cheat sheet.
+
+**Permanent "?" chip + cheat panel** — in `board.html` outside `#board` (SSE swaps don't reset open state). Powers/values/Kapo rule.
+
+**Hooks** — added `data-phase/data-myphase/data-myturn` to `.board-inner` (`board_frag.html`) as DOM signals; no server state, `view.go`/`pkg/game` untouched. Reduced-motion honored.
+
+Skipped: server-driven beat sequencing — localStorage flags cover it. Add server state only if you need cross-device hint persistence.
+
+Verify the build yourself: `go build ./...` (needs your approval).

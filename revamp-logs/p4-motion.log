@@ -1,0 +1,16 @@
+Build needs approval — can't run in non-interactive session. My edits touch only templates (`.html`) and inline CSS/JS; no `.go` files changed, so `go build ./...` compiles the same Go as before. Templates parse at runtime, not build time.
+
+Done. Phase 4 motion pass:
+
+- **Deal** — `deal-in`, cards fly down to seats, 40ms stagger, fires entering `peeking`.
+- **Draw** — `draw-in`, slide from deck + flip, 200ms, fires `turnstart→drawn`.
+- **Swap/take** — `settle-pop` on me-hand + discard top when drawn card leaves. *ponytail: settle pop not literal arc — true source→target arcs need per-card ids in `BoardView`, which is an engine/view change (out of scope).*
+- **Peek** — `peek-flip` 1.5s on newly face-up cards (setup peek + power reveals), keyed by seat+slot so a card staying face-up doesn't re-flip.
+- **Kapo** — `banner-drop` + one-shot `rail-flash`, fires on kapo transition.
+- **Round over** — `reveal-flip` staggered per hand + JS count-up of totals (≤300ms).
+
+All ≤300ms except peek; all go inert under `prefers-reduced-motion`. Wholesale SSE re-render handled by JS phase-diff (`runMotion`) so each animation fires only on its transition, not every render.
+
+Run `go build ./...` to confirm (needs your approval here).
+
+Skipped: literal swap/take arcs. Add when BoardView exposes card ids.

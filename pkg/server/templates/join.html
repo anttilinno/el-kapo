@@ -1,0 +1,20 @@
+{{define "join.html"}}<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Kapo - join table</title>
+{{template "styles"}}
+</head>
+<body>
+<div class="page">
+<h1>Kapo</h1>
+<div class="panel">
+<h3>Join table</h3>
+<form method="post" action="/games/{{.TableID}}/join">
+  <p><label>Your name<br><input name="name" required maxlength="20" autofocus></label></p>
+  <p><input type="submit" class="btn-primary" value="Join"></p>
+</form>
+</div>
+</div>
+</body>
+</html>{{end}}

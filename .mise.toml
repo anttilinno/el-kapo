@@ -1,0 +1,26 @@
+[tools]
+go = "1.25"
+
+[tasks.build]
+description = "Build the kapo binary"
+run = "go build -o kapo ./cmd/kapo"
+
+[tasks.dev]
+description = "Build and run kapo"
+run = "go run ./cmd/kapo"
+
+[tasks.build-web]
+description = "Build the kapo-web binary"
+run = "go build -o kapo-web ./cmd/kapo-web"
+
+[tasks.web]
+description = "Build and run kapo-web"
+run = "go run ./cmd/kapo-web"
+
+[tasks.test]
+description = "Run tests"
+run = "go test ./..."
+
+[tasks.clean]
+description = "Remove build artifacts"
+run = "rm -f kapo kapo-web"

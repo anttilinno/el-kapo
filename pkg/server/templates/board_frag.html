@@ -1,0 +1,223 @@
+{{/* facebody: the inner rank+pip (or joker star) for any card that is shown.
+     Works for both CardView and CardFace since both carry Rank/Pip/Joker. */}}
+{{define "facebody"}}
+  {{- if .Joker -}}
+    <span class="joker-star">★</span><span class="joker-name">JOKER</span>
+  {{- else -}}
+    <span class="crank tl">{{.Rank}}</span><span class="cpip">{{.Pip}}</span><span class="crank br">{{.Rank}}</span>
+  {{- end -}}
+{{end}}
+
+{{/* staticcard: a non-interactive face-up card (discard top, drawn card).
+     A span so it can sit inline inside <p> without splitting the paragraph. */}}
+{{define "staticcard"}}
+  <span class="card face {{if .Red}}red{{end}} {{if .Joker}}joker{{end}}">{{template "facebody" .}}</span>
+{{end}}
+
+{{/* seat: one player's nameplate and hand. Receives a PlayerView, so $ inside
+     the range is the PlayerView and $.TableID is available for move posts.
+     The three card branches preserve the exact classes and hx-* attributes the
+     click-to-select JS and htmx rely on: .card.selectable + data-slot for
+     multi-swap targets, hx-post/hx-vals for direct-action cards. */}}
+{{define "seat"}}
+<div class="seat {{if .IsCurrent}}current{{end}} {{if .IsMe}}me{{end}}">
+  <div class="nameplate">
+    <span class="pname">{{.Name}}</span>
+    {{if .IsBot}}<span class="tag">bot</span>{{end}}
+    {{if .IsMe}}<span class="tag">you</span>{{end}}
+    {{if .IsCurrent}}<span class="turn-dot">● to move</span>{{end}}
+  </div>
+  <div class="hand">
+  {{range .Cards}}
+    {{if or (eq .Action "take") (eq .Action "swap")}}
+      {{/* target slot: resolveTarget() toggles .picked and reads data-slot */}}
+      <button type="button" data-slot="{{.Idx}}"
+        class="card selectable {{if .Show}}face{{else}}back{{end}} {{if .Red}}red{{end}} {{if .Joker}}joker{{end}} {{if .FaceUp}}faceup{{end}} {{if and $.IsMe .Show}}seen{{end}}"
+      >{{if .Show}}{{template "facebody" .}}{{end}}</button>
+    {{else if .Action}}
+      {{/* direct-action card: peek-setup / peekown / arm-swap / peekother / swapother */}}
+      <button type="button"
+        class="card {{if .Show}}face{{else}}back{{end}} {{if .Red}}red{{end}} {{if .Joker}}joker{{end}} {{if .FaceUp}}faceup{{end}} {{if .Armed}}armed{{end}} {{if and $.IsMe .Show}}seen{{end}}"
+        hx-post="/games/{{$.TableID}}/move" hx-swap="none"
+        {{if or (eq .Action "peekother") (eq .Action "swapother")}}
+        hx-vals='{"action":"{{.Action}}","target":"{{.Target}}"}'
+        {{else}}
+        hx-vals='{"action":"{{.Action}}","slot":"{{.Idx}}"}'
+        {{end}}
+      >{{if .Show}}{{template "facebody" .}}{{end}}</button>
+    {{else}}
+      <div class="card {{if .Show}}face{{else}}back{{end}} {{if .Red}}red{{end}} {{if .Joker}}joker{{end}} {{if .FaceUp}}faceup{{end}} {{if and $.IsMe .Show}}seen{{end}}"
+      >{{if .Show}}{{template "facebody" .}}{{end}}</div>
+    {{end}}
+  {{end}}
+  </div>
+</div>
+{{end}}
+
+{{define "board_frag.html"}}
+<div class="board-inner" data-phase="{{.Phase}}" data-myphase="{{.MyPhase}}" data-myturn="{{if .MyTurn}}1{{end}}" data-kapo="{{if .KapoActive}}1{{end}}">
+
+{{if eq .Phase "lobby"}}
+  <div class="lobby">
+    <div class="lobby-code">
+      <span class="lobby-code-label">Table code</span>
+      <span class="table-code">{{.TableID}}</span>
+      <button type="button" class="btn-primary copy-invite"
+        onclick="navigator.clipboard&&navigator.clipboard.writeText(location.origin+'{{.JoinURL}}');this.textContent='Copied!'">Copy invite link</button>
+    </div>
+
+    <div class="seats">
+    {{range .Seats}}
+      <div class="seat-row {{if .Empty}}empty{{end}}">
+        {{if .Empty}}
+          <span class="seat-name muted">Empty seat</span>
+          <span class="seat-wait">waiting for the link&hellip;</span>
+          {{if $.IsAdmin}}<button type="button" class="btn-add-bot" hx-post="/games/{{$.TableID}}/move" hx-swap="none" hx-vals='{"action":"add-bot"}'>+ bot</button>{{end}}
+        {{else}}
+          <span class="seat-name">{{.Name}}</span>
+          {{if .IsBot}}<span class="tag">bot</span>{{end}}
+          {{if .IsMe}}<span class="tag joined">you</span>{{end}}
+        {{end}}
+      </div>
+    {{end}}
+    </div>
+
+    <div class="difficulty-seg">
+      <span class="seg-label">Difficulty</span>
+      {{if .IsAdmin}}
+        <div class="segmented">
+          <button type="button" class="{{if not .Hard}}active{{end}}" hx-post="/games/{{.TableID}}/move" hx-swap="none" hx-vals='{"action":"set-difficulty","difficulty":"easy"}'>EASY</button>
+          <button type="button" class="{{if .Hard}}active{{end}}" hx-post="/games/{{.TableID}}/move" hx-swap="none" hx-vals='{"action":"set-difficulty","difficulty":"hard"}'>HARD</button>
+        </div>
+      {{else}}
+        <div class="segmented readonly">
+          <span class="{{if not .Hard}}active{{end}}">EASY</span>
+          <span class="{{if .Hard}}active{{end}}">HARD</span>
+        </div>
+      {{end}}
+      <p class="consequence">{{if .Hard}}Hard &mdash; cards flash briefly, then it's all memory.{{else}}Easy &mdash; cards you've seen stay visible.{{end}}</p>
+    </div>
+
+    {{if .IsAdmin}}
+      <div class="controls">
+        <button class="btn-primary" {{if not .CanDeal}}disabled{{end}} hx-post="/games/{{.TableID}}/move" hx-swap="none" hx-vals='{"action":"deal"}'>Deal first round</button>
+      </div>
+      {{if not .CanDeal}}<p class="helper">Need at least 2 players to deal &mdash; add a bot or wait for someone to join.</p>{{end}}
+    {{else}}
+      <p class="helper">Waiting for the host to deal&hellip;</p>
+    {{end}}
+  </div>
+
+{{if .Flash}}<div class="toast" role="status">{{.Flash}}</div>{{end}}
+
+{{else}}
+
+<header class="board-head">
+  <div class="round-info">
+    <span class="round-num">Round {{.Round}}</span>
+    {{if .Hard}}<span class="mode-tag">Hard</span>{{end}}
+    {{if .KapoActive}}<span class="kapo-banner">{{.KapoBy}} called KAPO! Final turns</span>{{end}}
+  </div>
+  <div class="chips">
+    {{range .Scores}}
+    <div class="chip"><span class="chip-score">{{.Score}}</span><span class="chip-name">{{.Name}}</span></div>
+    {{end}}
+  </div>
+</header>
+
+  {{if ne .Phase "ended"}}
+  <div class="felt">
+    {{range .Players}}{{if eq .Pos "top"}}<div class="pos-top">{{template "seat" .}}</div>{{end}}{{end}}
+    {{range .Players}}{{if eq .Pos "left"}}<div class="pos-left">{{template "seat" .}}</div>{{end}}{{end}}
+    {{range .Players}}{{if eq .Pos "right"}}<div class="pos-right">{{template "seat" .}}</div>{{end}}{{end}}
+
+    <div class="center-strip">
+      <div class="pile">
+        <div class="deck-stack"
+          {{- if and .MyTurn (eq .MyPhase "turnstart")}} hx-post="/games/{{.TableID}}/move" hx-swap="none" hx-vals='{"action":"draw"}' title="Click to draw"{{end}}>
+          <div class="card back deck-card {{if and .MyTurn (eq .MyPhase "turnstart")}}legal-src{{end}}"></div>
+          <span class="pile-count">{{.DeckCount}}</span>
+        </div>
+        <span class="pile-label">Deck</span>
+      </div>
+      <div class="pile">
+        {{if eq .MyPhase "drawn"}}
+          <span class="armable" data-action="swap" data-multi="multiswap-drawn" data-url="/games/{{.TableID}}/move" title="Click, then click one of your cards to swap — or select several of your cards first, then click here">{{template "staticcard" .Drawn}}</span>
+        {{else}}<div class="card empty-slot"></div>{{end}}
+        <span class="pile-label">Drawn</span>
+      </div>
+      <div class="pile">
+        {{if and .MyTurn (eq .MyPhase "drawn")}}
+          <span class="discard-target" data-url="/games/{{.TableID}}/move" title="Click to discard your drawn card">
+            {{- if .HasDiscard}}{{template "staticcard" .DiscardTop}}{{else}}<div class="card empty-slot"></div>{{end -}}
+          </span>
+        {{else if and .MyTurn (eq .MyPhase "turnstart") .HasDiscard}}
+          <span class="armable" data-action="take" data-multi="multiswap-discard" data-url="/games/{{.TableID}}/move" title="Click, then click one of your cards to take it — or select several of your cards first, then click here">{{template "staticcard" .DiscardTop}}</span>
+        {{else if .HasDiscard}}
+          {{template "staticcard" .DiscardTop}}
+        {{else}}<div class="card empty-slot"></div>{{end}}
+        <span class="pile-label">Discard</span>
+        {{if .PowerPreview}}<span class="power-preview">{{.PowerPreview}}</span>{{end}}
+      </div>
+      {{if and .MyTurn (eq .MyPhase "turnstart") (not .KapoActive)}}
+      <div class="pile">
+        <button type="button" class="kapo-coin" hx-post="/games/{{.TableID}}/move" hx-swap="none" hx-vals='{"action":"kapo"}' title="Call Kapo — lowest hand total wins the round"><span class="coin">KAPO</span></button>
+        <span class="pile-label">Call</span>
+      </div>
+      {{end}}
+    </div>
+
+    {{range .Players}}{{if eq .Pos "me"}}<div class="pos-me">{{template "seat" .}}</div>{{end}}{{end}}
+  </div>
+  {{end}}
+
+  {{if or (eq .Phase "peeking") (eq .Phase "playing")}}
+    <div class="you-pill">
+      {{if .HintLine}}<span class="you-hint">{{.HintLine}}</span>{{end}}
+      {{if not .Hard}}
+        <span class="you-total" title="{{.MyKnownTotal}} points known{{if .MyUnknownCount}} · {{.MyUnknownCount}} card(s) still hidden{{end}}">known: {{.MyKnownTotal}} pts{{if .MyUnknownCount}} <span class="hidden-count">(+{{.MyUnknownCount}} hidden)</span>{{end}}</span>
+      {{end}}
+    </div>
+  {{end}}
+
+  {{if .Flash}}<div class="toast" role="status">{{.Flash}}</div>{{end}}
+
+  {{if and (eq .Phase "playing") .MyTurn (eq .MyPhase "action")}}
+    <div class="controls">
+      <button hx-post="/games/{{.TableID}}/move" hx-swap="none" hx-vals='{"action":"skip"}'>Skip</button>
+    </div>
+  {{end}}
+
+  {{if eq .Phase "roundover"}}
+    <h3>Round over &mdash; hands revealed</h3>
+    <table class="totals">
+    {{range .Totals}}<tr class="{{if .IsWinner}}win{{end}}"><td>{{.Name}}</td><td>{{.Total}} pts</td><td>{{if .IsWinner}}&#9733; winner{{end}}</td></tr>{{end}}
+    </table>
+    {{if .AutoWin}}<p>{{.AutoWin}} auto-wins with 2 queens + 2 kings!</p>{{end}}
+    {{if .CanNext}}<div class="controls"><button class="btn-primary" hx-post="/games/{{.TableID}}/move" hx-swap="none" hx-vals='{"action":"next-round"}'>Deal next round</button></div>{{end}}
+  {{end}}
+
+  {{if eq .Phase "matchover"}}
+    <h3>Match over</h3>
+    <p>Winner: <strong style="color:var(--gold-bright)">&#9733; {{.MatchWinner}}</strong></p>
+    <p><a href="/">New game</a></p>
+  {{end}}
+
+  {{if eq .Phase "ended"}}
+    <h3>Game ended by the admin</h3>
+    <table class="totals">
+    {{range .Scores}}<tr><td>{{.Name}}</td><td>{{.Score}} pts</td></tr>{{end}}
+    </table>
+    <p><a href="/">New game</a></p>
+  {{end}}
+
+{{end}}
+
+{{if and .IsAdmin (ne .Phase "lobby") (ne .Phase "ended") (ne .Phase "matchover")}}
+<nav class="sidebar">
+  <span class="sidebar-title">Admin</span>
+  <button class="btn-danger" hx-post="/games/{{.TableID}}/move" hx-swap="none" hx-vals='{"action":"end-game"}'>End game</button>
+</nav>
+{{end}}
+</div>
+{{end}}

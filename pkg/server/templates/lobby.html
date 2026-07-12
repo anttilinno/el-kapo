@@ -1,0 +1,21 @@
+{{define "lobby.html"}}<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Kapo</title>
+{{template "styles"}}
+</head>
+<body>
+<div class="page">
+<h1>Kapo</h1>
+<div class="panel">
+<p>A card game of memory and bluffing. Lowest hand total wins the round.</p>
+<form method="post" action="/games">
+  <p><label>Your name<br><input name="name" required maxlength="20" autofocus></label></p>
+  <p><input type="submit" class="btn-primary" value="Create table"></p>
+</form>
+<p><small>You'll get a table code to share &mdash; add bots or wait for players, then deal.</small></p>
+</div>
+</div>
+</body>
+</html>{{end}}

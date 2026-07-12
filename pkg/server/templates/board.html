@@ -1,0 +1,32 @@
+{{define "board.html"}}<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Kapo</title>
+{{template "scripts"}}
+{{template "styles"}}
+</head>
+<body hx-ext="sse" sse-connect="/games/{{.TableID}}/events">
+<div class="page">
+<h1>Kapo</h1>
+<div id="board" sse-swap="board">
+{{template "board_frag.html" .}}
+</div>
+</div>
+
+<!-- Permanent cheat sheet: "?" chip bottom-left toggles the panel. Lives
+     outside #board so SSE board pushes never reset the open/closed state. -->
+<button id="cheat-btn" type="button" title="Cheat sheet" aria-label="Cheat sheet">?</button>
+<aside id="cheat-panel" role="dialog" aria-label="Cheat sheet">
+  <div class="cheat-head"><span>Cheat sheet</span><button id="cheat-close" type="button" aria-label="Close">&times;</button></div>
+  <dl class="cheat-list">
+    <dt>7 · 8</dt><dd>discard to peek one of your own cards</dd>
+    <dt>9 · 10</dt><dd>discard to peek an opponent's card</dd>
+    <dt>J · Q</dt><dd>discard to blind-swap with an opponent</dd>
+    <dt>K&spades; K&hearts;</dt><dd>worth 13 points</dd>
+    <dt>Joker</dt><dd>worth 0 points</dd>
+    <dt>Kapo</dt><dd>tap the KAPO coin at turn start; lowest hand total wins the round</dd>
+  </dl>
+</aside>
+</body>
+</html>{{end}}
