@@ -7,11 +7,16 @@ import (
 	"html/template"
 	"log/slog"
 	"math/rand"
+	"mime"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 )
+
+func init() {
+	mime.AddExtensionType(".webmanifest", "application/manifest+json")
+}
 
 //go:embed templates/*.html
 var templateFS embed.FS
@@ -43,6 +48,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /games/{id}/events", s.handleEvents)
 	mux.HandleFunc("POST /games/{id}/move", s.handleMove)
 	mux.Handle("GET /static/", http.FileServerFS(staticFS))
+	mux.HandleFunc("GET /sw.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript")
+		b, _ := staticFS.ReadFile("static/sw.js")
+		w.Write(b)
+	})
 	return mux
 }
 
