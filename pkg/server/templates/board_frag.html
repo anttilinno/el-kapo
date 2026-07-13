@@ -77,6 +77,7 @@
           <span class="seat-name">{{.Name}}</span>
           {{if .IsBot}}<span class="tag">bot</span>{{end}}
           {{if .IsMe}}<span class="tag joined">you</span>{{end}}
+          {{if and .IsBot $.IsAdmin}}<button type="button" class="btn-remove-bot" title="Remove bot" hx-post="/games/{{$.TableID}}/move" hx-swap="none" hx-vals='{"action":"remove-bot","seat":"{{.Seat}}"}'>&times;</button>{{end}}
         {{end}}
       </div>
     {{end}}
@@ -102,7 +103,7 @@
       <div class="controls">
         <button class="btn-primary" {{if not .CanDeal}}disabled{{end}} hx-post="/games/{{.TableID}}/move" hx-swap="none" hx-vals='{"action":"deal"}'>Deal first round</button>
       </div>
-      {{if not .CanDeal}}<p class="helper">Need at least 2 players to deal &mdash; add a bot or wait for someone to join.</p>{{end}}
+      <p class="helper">{{if not .CanDeal}}Need at least 2 players to deal &mdash; add a bot or wait for someone to join.{{end}}</p>
     {{else}}
       <p class="helper">Waiting for the host to deal&hellip;</p>
     {{end}}
@@ -135,8 +136,8 @@
       <div class="pile">
         <div class="deck-stack"
           {{- if and .MyTurn (eq .MyPhase "turnstart")}} hx-post="/games/{{.TableID}}/move" hx-swap="none" hx-vals='{"action":"draw"}' title="Click to draw"{{end}}>
-          <div class="card back deck-card {{if and .MyTurn (eq .MyPhase "turnstart")}}legal-src{{end}}"></div>
-          <span class="pile-count">{{.DeckCount}}</span>
+          <div class="card back deck-card {{if .Hard}}deck-{{.DeckSize}}{{end}} {{if and .MyTurn (eq .MyPhase "turnstart")}}legal-src{{end}}"></div>
+          {{if not .Hard}}<span class="pile-count">{{.DeckCount}}</span>{{end}}
         </div>
         <span class="pile-label">Deck</span>
       </div>
@@ -159,12 +160,12 @@
         <span class="pile-label">Discard</span>
         {{if .PowerPreview}}<span class="power-preview">{{.PowerPreview}}</span>{{end}}
       </div>
-      {{if and .MyTurn (eq .MyPhase "turnstart") (not .KapoActive)}}
-      <div class="pile">
+      {{/* Always rendered so its width is reserved — otherwise the whole
+           center-strip re-centers and the piles jog sideways every turn. */}}
+      <div class="pile{{if not (and .MyTurn (eq .MyPhase "turnstart") (not .KapoActive))}} pile-reserved{{end}}">
         <button type="button" class="kapo-coin" hx-post="/games/{{.TableID}}/move" hx-swap="none" hx-vals='{"action":"kapo"}' title="Call Kapo — lowest hand total wins the round"><span class="coin">KAPO</span></button>
         <span class="pile-label">Call</span>
       </div>
-      {{end}}
     </div>
 
     {{range .Players}}{{if eq .Pos "me"}}<div class="pos-me">{{template "seat" .}}</div>{{end}}{{end}}

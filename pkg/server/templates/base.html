@@ -168,7 +168,7 @@ runBeats();
 // ponytail: swap/take is a "settle" pop, not a literal source->target arc -
 // true arcs need per-card ids from BoardView (out of scope: no engine change).
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-let mPhase = null, mMyPhase = null, mKapo = false, revealed = new Set();
+let mPhase = null, mMyPhase = null, mKapo = false, mDiscard = null, revealed = new Set();
 // reveal-eligible = publicly face-up cards always, plus your own faces during
 // the setup peek. Keyed by seat+card index so a card that merely stays face-up
 // across renders isn't re-flipped.
@@ -197,7 +197,7 @@ function countUpTotals(b) {
 }
 function runMotion() {
   const b = document.querySelector('.board-inner');
-  if (!b) { mPhase = mMyPhase = null; mKapo = false; revealed = new Set(); return; }
+  if (!b) { mPhase = mMyPhase = null; mKapo = false; mDiscard = null; revealed = new Set(); return; }
   const phase = b.dataset.phase, myphase = b.dataset.myphase, kapo = b.dataset.kapo === '1';
   const felt = b.querySelector('.felt');
   const dealing = phase === 'peeking' && mPhase !== 'peeking';   // cards land at the setup peek
@@ -216,6 +216,16 @@ function runMotion() {
     b.querySelectorAll('.pos-me .hand .card, .center-strip .pile:last-child .card')
       .forEach(c => c.classList.add('settle'));
   }
+  // Any move lands a card on the discard pile - toss it in so opponents' moves
+  // are followable, not an instant hard-cut. Keyed on the top card's identity
+  // so it only fires when the pile actually changed (skips the first render so
+  // a page load mid-game doesn't animate).
+  const discPile = [...b.querySelectorAll('.center-strip .pile')]
+    .find(p => p.querySelector('.pile-label') && p.querySelector('.pile-label').textContent.trim() === 'Discard');
+  const discCard = discPile && discPile.querySelector('.card.face');
+  const discKey = discCard ? discCard.textContent.replace(/\s+/g, '') : '';
+  if (discCard && mDiscard !== null && discKey !== mDiscard) discCard.classList.add('tossed');
+  mDiscard = discKey;
   // Kapo called: banner drops into the header, felt rail flashes once.
   if (kapo && !mKapo) {
     const banner = b.querySelector('.kapo-banner');
@@ -405,8 +415,14 @@ runMotion();
      halo (clicking the drawn/discard card commits all picks as a multiswap). */
   .card.selectable { cursor:pointer; transition:transform .12s, box-shadow .12s; }
   .card.selectable:hover { transform:translateY(-4px); box-shadow:0 8px 14px rgba(0,0,0,.5); }
-  .card.picked { transform:translateY(-10px);
-    box-shadow:0 0 0 2px var(--gold-bright), 0 10px 18px rgba(0,0,0,.55), 0 0 16px rgba(255,209,102,.6); }
+  /* Picked (multi-select): lift well clear of neighbours and hover (-4px) so
+     it's unmistakable how many cards are selected. */
+  .card.picked { transform:translateY(-24px) scale(1.06); z-index:3;
+    box-shadow:0 0 0 3px var(--gold-bright), 0 18px 26px rgba(0,0,0,.6), 0 0 24px rgba(255,209,102,.8); }
+  .card.picked::before { content:"\2713"; position:absolute; top:-.55rem; left:50%;
+    transform:translateX(-50%); width:1.15rem; height:1.15rem; border-radius:50%;
+    background:var(--gold-bright); color:#1a1405; font-size:.8rem; font-weight:700;
+    display:flex; align-items:center; justify-content:center; box-shadow:0 2px 4px rgba(0,0,0,.5); }
 
   /* Armable center-strip cards (drawn/discard): click to arm, then click an
      own slot to swap directly. */
@@ -460,12 +476,19 @@ runMotion();
   .pos-me .card { --card-w: var(--card-w-me); }
 
   /* ---- Center strip: deck stack + discard pile ---------------------- */
-  .center-strip { display:flex; gap:2.5rem; justify-content:center; align-items:flex-start; padding:.4rem 0; }
-  .pile { display:flex; flex-direction:column; align-items:center; gap:.4rem; }
+  /* Constant bottom band reserves room for the off-flow .power-preview so it
+     never overlaps the seat below - reserved always, so no vertical jump. */
+  .center-strip { display:flex; gap:2.5rem; justify-content:center; align-items:flex-start; padding:.4rem 0 3rem; }
+  .pile { position:relative; display:flex; flex-direction:column; align-items:center; gap:.4rem; }
+  .pile-reserved { visibility:hidden; }
   .pile-label { font-size:.65rem; text-transform:uppercase; letter-spacing:.12em; color:#bcd6c3; }
   .deck-stack { position:relative; }
   .deck-stack[hx-post] { cursor:pointer; }
   .deck-stack .deck-card { box-shadow:3px 3px 0 -1px #4a0b10, 6px 6px 0 -2px #3a080d, 0 4px 8px rgba(0,0,0,.5); }
+  /* Hard mode: no number, thickness alone tells you roughly how much is left. */
+  .deck-stack .deck-card.deck-full { box-shadow:3px 3px 0 -1px #4a0b10, 6px 6px 0 -2px #3a080d, 9px 9px 0 -3px #2f0609, 12px 12px 0 -4px #240407, 0 4px 8px rgba(0,0,0,.5); }
+  .deck-stack .deck-card.deck-half { box-shadow:3px 3px 0 -1px #4a0b10, 6px 6px 0 -2px #3a080d, 0 4px 8px rgba(0,0,0,.5); }
+  .deck-stack .deck-card.deck-low { box-shadow:1.5px 1.5px 0 -1px #4a0b10, 0 4px 8px rgba(0,0,0,.5); }
   .deck-card::after { display:none; } /* count sits here instead of the ornament */
   .pile-count { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
     font-family:var(--display); font-weight:700; color:var(--gold-bright); font-size:1.1rem;
@@ -504,8 +527,11 @@ runMotion();
   .hidden-count { color:#9fb7a6; font-family:system-ui, sans-serif; font-weight:400; font-size:.75rem; }
 
   /* Power preview: label on the discard target while a card is drawn. */
-  .power-preview { display:block; margin-top:.25rem; color:#ffce8a; font-size:.72rem;
-    max-width:8rem; text-align:center; line-height:1.2; }
+  /* Absolute so the appearing/disappearing text never resizes the pile and
+     jogs the whole center-strip. Floats below the Discard pile, off-flow. */
+  .power-preview { position:absolute; top:100%; left:50%; transform:translateX(-50%);
+    margin-top:.25rem; color:#ffce8a; font-size:.72rem;
+    width:8rem; text-align:center; line-height:1.2; pointer-events:none; }
 
   /* Seen (👁) badge: own cards the viewer knows, easy-mode memory aid. */
   .pos-me .card.seen::after { content:"\1F441"; position:absolute; top:-.35rem; right:-.35rem;
@@ -564,6 +590,9 @@ runMotion();
      peek flip; every one goes inert under prefers-reduced-motion below. */
   @keyframes deal-in    { from { opacity:0; transform:translateY(-140px) scale(.7); } to { opacity:1; transform:none; } }
   @keyframes draw-in    { from { opacity:.2; transform:translateX(-70px) rotateY(90deg); } to { opacity:1; transform:none; } }
+  @keyframes toss-in    { 0% { opacity:0; transform:translateY(-46px) scale(1.18) rotate(-6deg); }
+                          60% { opacity:1; transform:translateY(4px) scale(1.04); }
+                          100% { transform:none; } }
   @keyframes settle-pop { from { transform:scale(1.14); } to { transform:none; } }
   @keyframes peek-flip  { 0% { opacity:.3; transform:perspective(500px) rotateY(88deg); } 100% { opacity:1; transform:perspective(500px) rotateY(0); } }
   @keyframes reveal-flip{ from { transform:perspective(500px) rotateY(90deg); } to { transform:perspective(500px) rotateY(0); } }
@@ -585,6 +614,7 @@ runMotion();
   .felt.revealing .hand .card:nth-child(5) { animation-delay:.24s; }
   .felt.revealing .hand .card:nth-child(6) { animation-delay:.3s; }
   .card.just-drawn { animation:draw-in .2s ease-out both; z-index:2; }
+  .card.tossed { animation:toss-in .45s ease-out both; z-index:2; }
   .card.settle { animation:settle-pop .2s ease-out; }
   .card.flip-in { animation:peek-flip 1.5s ease; z-index:2; }   /* peek exempt from the 300ms cap */
   .kapo-banner.kapo-drop { animation:banner-drop .3s cubic-bezier(.2,1.2,.4,1) both; }
@@ -616,13 +646,17 @@ runMotion();
     color:var(--gold-bright); text-shadow:0 0 18px rgba(255,209,102,.35); }
   .copy-invite { margin-left:auto; }
   .seats { display:flex; flex-direction:column; gap:.5rem; }
-  .seat-row { display:flex; align-items:center; gap:.6rem; padding:.6rem .9rem;
+  .seat-row { display:flex; align-items:center; gap:.6rem; padding:.6rem .9rem; min-height:3.3rem;
     border-radius:10px; background:rgba(0,0,0,.22); border:1px solid var(--line); }
   .seat-row.empty { border-style:dashed; border-color:var(--gold-dim); background:rgba(0,0,0,.1); }
   .seat-name { font-family:var(--display); color:#eef2e0; letter-spacing:.02em; }
   .seat-name.muted { color:#6f7d70; }
   .seat-wait { font-size:.8rem; color:#8a7327; }
   .btn-add-bot { margin-left:auto; padding:.35rem .8rem; font-size:.8rem; }
+  .btn-remove-bot { margin-left:auto; width:1.6rem; height:1.6rem; padding:0; line-height:1;
+    font-size:1.1rem; border-radius:50%; border:1px solid var(--gold-dim);
+    background:rgba(0,0,0,.2); color:#c98; cursor:pointer; }
+  .btn-remove-bot:hover { background:var(--burgundy); color:#fff; border-color:var(--burgundy); }
   .difficulty-seg { display:flex; flex-direction:column; gap:.5rem; }
   .seg-label { font-family:var(--display); font-size:.7rem; text-transform:uppercase;
     letter-spacing:.1em; color:var(--gold); }
@@ -635,7 +669,7 @@ runMotion();
   .segmented .active { background:linear-gradient(#d9b84a,#b8912f); color:#1a1405; font-weight:700; }
   .segmented.readonly > span { cursor:default; }
   .consequence { margin:0; font-size:.85rem; color:#cfe0d3; }
-  .helper { margin:.4rem 0 0; font-size:.85rem; color:#8a7327; }
+  .helper { margin:.4rem 0 0; font-size:.85rem; color:#8a7327; min-height:1.2em; }
 
   /* ---- Admin sidebar (restyled to theme) ----------------------------
      Anchored bottom-right so it never overlaps the score chips in the

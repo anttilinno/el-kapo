@@ -71,13 +71,13 @@ type Table struct {
 	flash []string // per-seat private message, cleared on that seat's next move
 	log   []string // shared public event log, newest last
 
-	// Hard mode: revealed cards are only shown for revealFor, then rendered
-	// face-down again - the player has to memorize them. reveals holds the
-	// show-until deadline per (viewer, player, slot); lastVis is the previous
-	// visibility snapshot so diffReveals can detect newly visible cards.
+	// Hard mode: peeked cards are only shown for revealFor, then rendered
+	// face-down again - the player has to memorize them. Only the intentional
+	// peeks (starting pair, 7/8 own, 9/10 opponent) grant a reveal; swaps and
+	// takes stay face-down. reveals holds the show-until deadline per
+	// (viewer, player, slot).
 	hard    bool
 	reveals map[revealKey]time.Time
-	lastVis map[revealKey]bool
 
 	subs      []subscriber
 	botLoopOn bool // the per-table bot loop goroutine has been started
@@ -90,6 +90,11 @@ type revealKey struct{ viewer, player, slot int }
 
 // revealFor is how long a newly revealed card stays visible in hard mode.
 const revealFor = 3 * time.Second
+
+// botTick paces bot turns so humans can follow them on the SSE stream. ~2s
+// matches the per-card cadence common in digital card games (tablet clients
+// run ~2s/card; deliberate AI up to ~5s). Var so tests can drop it to run fast.
+var botTick = 2 * time.Second
 
 // NewTable creates an empty table with a random 16-hex-char id.
 func NewTable(rng *rand.Rand) *Table {
@@ -181,7 +186,6 @@ func (t *Table) startRound(starter int) {
 	t.flash = make([]string, n)
 	t.phase = Peeking
 	t.reveals = make(map[revealKey]time.Time)
-	t.lastVis = make(map[revealKey]bool)
 
 	for i := range t.seats {
 		t.seats[i].peekSlots = nil
@@ -228,6 +232,8 @@ func (t *Table) ApplyMove(seat int, action string, form url.Values) {
 		t.doPeekSetup(seat, form)
 	case "add-bot":
 		t.doAddBot(seat)
+	case "remove-bot":
+		t.doRemoveBot(seat, form)
 	case "set-difficulty":
 		t.doSetDifficulty(seat, form)
 	case "deal":
@@ -243,7 +249,6 @@ func (t *Table) ApplyMove(seat int, action string, form url.Values) {
 		}
 		t.doTurnAction(seat, action, form)
 	}
-	t.diffReveals()
 }
 
 // reveal grants viewer a timed look at player's slot in hard mode and
@@ -266,38 +271,6 @@ func (t *Table) revealActive(viewer, player, slot int) bool {
 	}
 	d, ok := t.reveals[revealKey{viewer, player, slot}]
 	return ok && time.Now().Before(d)
-}
-
-// diffReveals compares each human viewer's current card visibility (face-up
-// or personally known) against the previous snapshot and starts a timed
-// reveal for anything newly visible. Being a generic diff, it catches every
-// reveal source - discard takes, failed multi-swaps, bot moves - without
-// per-action bookkeeping; only re-peeks of an already-known slot need the
-// explicit reveal calls in the peek handlers. Caller must hold t.mu.
-func (t *Table) diffReveals() {
-	if !t.hard || t.g == nil {
-		return
-	}
-	vis := make(map[revealKey]bool)
-	for v, s := range t.seats {
-		if s.isBot {
-			continue
-		}
-		for p := range t.seats {
-			for slot := range t.g.Hand(p) {
-				_, up := t.g.FaceUpCard(p, slot)
-				if _, known := t.g.KnownTo(v, p, slot); up || known {
-					vis[revealKey{v, p, slot}] = true
-				}
-			}
-		}
-	}
-	for k := range vis {
-		if !t.lastVis[k] {
-			t.reveal(k.viewer, k.player, k.slot)
-		}
-	}
-	t.lastVis = vis
 }
 
 func (t *Table) doPeekSetup(seat int, form url.Values) {
@@ -351,6 +324,24 @@ func (t *Table) doAddBot(by int) {
 	}
 	t.seats = append(t.seats, seat{name: fmt.Sprintf("AI-%d", bots+1), isBot: true})
 	t.flash = append(t.flash, "")
+}
+
+// doRemoveBot removes the bot seat at the given index while the lobby is open.
+// Admin-only; refuses to remove a human seat.
+func (t *Table) doRemoveBot(by int, form url.Values) {
+	if by != 0 {
+		t.flash[by] = "only the admin can remove bots"
+		return
+	}
+	if t.phase != Lobby {
+		return
+	}
+	idx, err := slotArg(form, "seat")
+	if err != nil || idx < 0 || idx >= len(t.seats) || !t.seats[idx].isBot {
+		return
+	}
+	t.seats = append(t.seats[:idx], t.seats[idx+1:]...)
+	t.flash = append(t.flash[:idx], t.flash[idx+1:]...)
 }
 
 // doSetDifficulty flips easy/hard from the lobby segmented control (admin-only).
@@ -426,12 +417,6 @@ func (t *Table) doTurnAction(seat int, action string, form url.Values) {
 		top, _ := t.g.TopDiscard()
 		if err = t.g.TakeDiscard(slot); err == nil {
 			t.logf("%s takes the %s from the discard pile into slot %d", name, top, slot+1)
-			// Everyone watched the face-up discard go into this slot.
-			for v, s := range t.seats {
-				if !s.isBot {
-					t.reveal(v, seat, slot)
-				}
-			}
 		}
 
 	case "swap":
@@ -442,7 +427,6 @@ func (t *Table) doTurnAction(seat int, action string, form url.Values) {
 		old := t.g.Hand(seat)[slot]
 		if err = t.g.SwapDrawn(slot); err == nil {
 			t.logf("%s discards the %s", name, old)
-			t.reveal(seat, seat, slot)
 		}
 
 	case "discard":
@@ -590,7 +574,11 @@ func (t *Table) checkRoundEnd() {
 // pacing so humans can follow bot moves on the SSE stream.
 func (t *Table) botLoop() {
 	for {
-		time.Sleep(500 * time.Millisecond)
+		// Paces bot turns slow enough for a human to follow each move on the
+		// SSE stream - a whole bot turn lands in one broadcast, so too fast a
+		// tick makes opponents' moves impossible to catch. Var, not const, so
+		// tests can run it fast.
+		time.Sleep(botTick)
 
 		t.mu.Lock()
 		if t.phase == Ended || t.phase == MatchOver {
@@ -606,7 +594,6 @@ func (t *Table) botLoop() {
 				t.logf("%s %s", t.seats[cur].name, line)
 			}
 			t.checkRoundEnd()
-			t.diffReveals()
 		}
 		t.mu.Unlock()
 

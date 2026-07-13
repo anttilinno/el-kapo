@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "el-kapo-web",
+      "runtimeExecutable": "go",
+      "runtimeArgs": ["run", "./cmd/el-kapo-web"],
+      "port": 8080
+    }
+  ]
+}

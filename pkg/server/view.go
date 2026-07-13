@@ -91,6 +91,7 @@ type ScoreView struct {
 }
 
 type SeatView struct {
+	Seat    int // index into t.seats, for admin remove-bot
 	Name    string
 	Claimed bool
 	IsBot   bool
@@ -127,6 +128,7 @@ type BoardView struct {
 	HasDiscard bool
 	DiscardTop CardFace
 	DeckCount  int
+	DeckSize   string // hard mode: "full" | "half" | "low" stack thickness, no number
 
 	MyKnownTotal   int // points of the viewer's own cards they currently know
 	MyUnknownCount int // viewer's own cards still hidden from them
@@ -232,7 +234,7 @@ func (t *Table) buildView(viewer int) BoardView {
 		for i := 0; i < maxSeats; i++ {
 			if i < len(t.seats) {
 				s := t.seats[i]
-				v.Seats = append(v.Seats, SeatView{Name: s.name, Claimed: true, IsBot: s.isBot, IsMe: i == viewer})
+				v.Seats = append(v.Seats, SeatView{Seat: i, Name: s.name, Claimed: true, IsBot: s.isBot, IsMe: i == viewer})
 			} else {
 				v.Seats = append(v.Seats, SeatView{Empty: true})
 			}
@@ -262,6 +264,16 @@ func (t *Table) buildView(viewer int) BoardView {
 		v.DiscardTop = faceOf(top)
 	}
 	v.DeckCount = t.g.DeckLen()
+	// Hard mode shows thickness, not a number - three coarse buckets over a
+	// 52-card pack so players who care can still count for themselves.
+	switch {
+	case v.DeckCount >= 30:
+		v.DeckSize = "full"
+	case v.DeckCount >= 10:
+		v.DeckSize = "half"
+	default:
+		v.DeckSize = "low"
+	}
 
 	// Viewer's own running total, over only the cards they currently know.
 	for slot, c := range t.g.Hand(viewer) {
@@ -365,11 +377,11 @@ func (t *Table) buildView(viewer int) BoardView {
 }
 
 // cardView resolves what viewer may see of player's slot: face-up cards are
-// public to everyone, everything else only if the viewer has personally
-// seen it (own peeks, granted peeks, or a public move that revealed it). At
-// RoundOver/MatchOver the engine's own state is fully public, so show all.
-// Hard mode adds a time gate on top of that: engine-visible cards render
-// face-down again once their reveal window expires.
+// public to everyone, everything else only if the viewer personally knows it.
+// At RoundOver/MatchOver the engine's own state is fully public, so show all.
+// Hard mode adds a time gate: a known card is shown only while an active
+// reveal window from an intentional peek (starting pair, 7/8 own, 9/10
+// opponent) lasts - swaps and takes never reveal, the player must remember.
 func (t *Table) cardView(viewer, player, slot int) CardView {
 	cv := CardView{Idx: slot, Num: slot + 1, Target: fmt.Sprintf("%d-%d", player, slot)}
 
@@ -379,12 +391,12 @@ func (t *Table) cardView(viewer, player, slot int) CardView {
 		_, cv.FaceUp = t.g.FaceUpCard(player, slot)
 		return cv
 	}
+	// Face-up cards are physically public (e.g. a failed multi-swap penalty) —
+	// always shown, in both modes; they are not a memory reveal.
 	if c, ok := t.g.FaceUpCard(player, slot); ok {
-		if t.revealActive(viewer, player, slot) {
-			cv.setFace(c)
-			cv.Show = true
-			cv.FaceUp = true
-		}
+		cv.setFace(c)
+		cv.Show = true
+		cv.FaceUp = true
 		return cv
 	}
 	if c, ok := t.g.KnownTo(viewer, player, slot); ok && t.revealActive(viewer, player, slot) {
