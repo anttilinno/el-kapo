@@ -59,7 +59,7 @@ type CardView struct {
 	FaceUp bool   // publicly face-up (shown to every viewer)
 	Action string // "", or "peek-setup"/"swap"/"take"/"peekown"/"arm-swap"/"peekother"/"swapother"
 	Target string // "player-slot", set for opponent cards regardless of Action
-	Armed  bool   // this own slot is the currently armed swap-other source
+	Armed  bool   // this slot (own or opponent) is the armed swap-other endpoint
 
 	// Presentation, populated alongside Label whenever Show is true.
 	Rank  string
@@ -348,7 +348,7 @@ func (t *Table) buildView(viewer int) BoardView {
 				case game.ActionPeekOther:
 					v.HintLine = "Pick an opponent's card to peek at it"
 				case game.ActionSwapOther:
-					v.HintLine = "Pick your card, then an opponent's to swap"
+					v.HintLine = "Pick your card and an opponent's — either order — to swap"
 				}
 			}
 		} else {
@@ -485,6 +485,7 @@ func (t *Table) annotateActions(viewer int, players []PlayerView) {
 					} else {
 						for ci := range players[pi].Cards {
 							players[pi].Cards[ci].Action = "swapother"
+							players[pi].Cards[ci].Armed = pi == t.armedPlayer && players[pi].Cards[ci].Idx == t.armedTheir
 						}
 					}
 				}

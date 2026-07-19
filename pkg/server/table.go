@@ -66,7 +66,9 @@ type Table struct {
 
 	drawnCard     game.Card       // current player's undecided drawn card
 	pendingAction game.ActionType // action unlocked by the last DiscardDrawn
-	armedSlot     int             // own slot picked for a pending swap-other; -1 = none
+	armedSlot     int             // own slot armed for a pending swap-other; -1 = none
+	armedPlayer   int             // opponent seat armed for swap-other; -1 = none
+	armedTheir    int             // opponent slot armed for swap-other; -1 = none
 
 	flash []string // per-seat private message, cleared on that seat's next move
 	log   []string // shared public event log, newest last
@@ -98,7 +100,7 @@ var botTick = 2 * time.Second
 
 // NewTable creates an empty table with a random 16-hex-char id.
 func NewTable(rng *rand.Rand) *Table {
-	return &Table{id: randHex(8), rng: rng, nextStarter: -1, armedSlot: -1}
+	return &Table{id: randHex(8), rng: rng, nextStarter: -1, armedSlot: -1, armedPlayer: -1, armedTheir: -1}
 }
 
 func (t *Table) ID() string { return t.id }
@@ -182,7 +184,7 @@ func (t *Table) startRound(starter int) {
 	t.round++
 	t.pendingAction = game.ActionNone
 	t.drawnCard = game.Card{}
-	t.armedSlot = -1
+	t.armedSlot, t.armedPlayer, t.armedTheir = -1, -1, -1
 	t.flash = make([]string, n)
 	t.phase = Peeking
 	t.reveals = make(map[revealKey]time.Time)
@@ -435,7 +437,7 @@ func (t *Table) doTurnAction(seat int, action string, form url.Values) {
 		if at, err = t.g.DiscardDrawn(); err == nil {
 			t.logf("%s discards the %s", name, drawn)
 			t.pendingAction = at
-			t.armedSlot = -1
+			t.armedSlot, t.armedPlayer, t.armedTheir = -1, -1, -1
 		}
 
 	case "multiswap-drawn":
@@ -488,27 +490,41 @@ func (t *Table) doTurnAction(seat int, action string, form url.Values) {
 		if slot, err = slotArg(form, "slot"); err != nil {
 			break
 		}
-		t.armedSlot = slot
+		if t.armedPlayer >= 0 {
+			// opponent card already picked — this own card completes the swap
+			if err = t.g.SwapOther(slot, t.armedPlayer, t.armedTheir); err == nil {
+				t.logf("%s blind-swaps a card with %s", name, t.seats[t.armedPlayer].name)
+				t.pendingAction = game.ActionNone
+				t.armedSlot, t.armedPlayer, t.armedTheir = -1, -1, -1
+			}
+		} else {
+			t.armedSlot = slot
+		}
 
 	case "swapother":
-		if t.armedSlot < 0 {
-			err = fmt.Errorf("pick your own slot first")
+		if t.pendingAction != game.ActionSwapOther {
+			err = fmt.Errorf("no swap pending")
 			break
 		}
 		var p, s int
 		if p, s, err = targetArg(form); err != nil {
 			break
 		}
-		if err = t.g.SwapOther(t.armedSlot, p, s); err == nil {
-			t.logf("%s blind-swaps a card with %s", name, t.seats[p].name)
-			t.pendingAction = game.ActionNone
-			t.armedSlot = -1
+		if t.armedSlot >= 0 {
+			// own card already picked — this opponent card completes the swap
+			if err = t.g.SwapOther(t.armedSlot, p, s); err == nil {
+				t.logf("%s blind-swaps a card with %s", name, t.seats[p].name)
+				t.pendingAction = game.ActionNone
+				t.armedSlot, t.armedPlayer, t.armedTheir = -1, -1, -1
+			}
+		} else {
+			t.armedPlayer, t.armedTheir = p, s
 		}
 
 	case "skip":
 		if err = t.g.SkipAction(); err == nil {
 			t.pendingAction = game.ActionNone
-			t.armedSlot = -1
+			t.armedSlot, t.armedPlayer, t.armedTheir = -1, -1, -1
 		}
 
 	case "kapo":

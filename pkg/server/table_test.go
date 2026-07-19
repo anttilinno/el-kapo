@@ -180,6 +180,68 @@ func TestHardModeFaceUpPublic(t *testing.T) {
 	}
 }
 
+// TestSwapOtherEitherOrder: a J/Q blind-swap can be armed opponent-card-first
+// and completed with an own card, not only own-first. Drives seeded rounds
+// until a swap-other actually comes up, then exercises the opponent-first path.
+func TestSwapOtherEitherOrder(t *testing.T) {
+	for seed := int64(1); seed <= 60; seed++ {
+		tbl := hardTablePlaying(t, seed)
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if p := tbl.Phase(); p == RoundOver || p == MatchOver {
+				break // this seed never produced a swap-other; try the next
+			}
+			tbl.mu.Lock()
+			myTurn := tbl.g.Current() == 0
+			gphase := tbl.g.Phase()
+			pending := tbl.pendingAction
+			ownLen := len(tbl.g.Hand(0))
+			theirLen := len(tbl.g.Hand(1))
+			tbl.mu.Unlock()
+
+			if !myTurn {
+				time.Sleep(5 * time.Millisecond)
+				continue
+			}
+			switch gphase {
+			case game.TurnStart:
+				tbl.ApplyMove(0, "draw", nil)
+			case game.Drawn:
+				tbl.ApplyMove(0, "discard", nil) // discard to unlock any power
+			case game.Action:
+				if pending != game.ActionSwapOther {
+					tbl.ApplyMove(0, "skip", nil)
+					continue
+				}
+				if ownLen == 0 || theirLen == 0 {
+					tbl.ApplyMove(0, "skip", nil)
+					continue
+				}
+				// Opponent card first: must arm, not resolve.
+				tbl.ApplyMove(0, "swapother", url.Values{"target": {"1-0"}})
+				tbl.mu.Lock()
+				armedOK := tbl.armedPlayer == 1 && tbl.armedTheir == 0 &&
+					tbl.armedSlot == -1 && tbl.pendingAction == game.ActionSwapOther
+				tbl.mu.Unlock()
+				if !armedOK {
+					t.Fatalf("opponent-first click should arm without resolving")
+				}
+				// Own card completes the swap.
+				tbl.ApplyMove(0, "arm-swap", url.Values{"slot": {"0"}})
+				tbl.mu.Lock()
+				resolved := tbl.pendingAction == game.ActionNone &&
+					tbl.armedSlot == -1 && tbl.armedPlayer == -1 && tbl.armedTheir == -1
+				tbl.mu.Unlock()
+				if !resolved {
+					t.Fatalf("own card after opponent should resolve the swap and clear arming")
+				}
+				return // proved the either-order path
+			}
+		}
+	}
+	t.Skip("no swap-other arose in 60 seeds; nothing exercised")
+}
+
 // TestRemoveBot: the admin can add and remove bots in the lobby; a non-admin
 // cannot, and a human seat can never be removed.
 func TestRemoveBot(t *testing.T) {
