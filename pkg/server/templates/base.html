@@ -496,23 +496,24 @@ runMotion();
 
   /* Kapo coin: a burgundy casino chip on the felt, replaces the old button.
      Sits in the center strip only when calling Kapo is legal. */
-  .kapo-coin {
+  /* Kapo and Skip share the pile slot right of the discard: both are round
+     coins so the row keeps one height, colour-coded by meaning. */
+  .kapo-coin, .skip-coin {
     width:3.6rem; height:calc(var(--card-w) * 1.4); border:none; background:none;
     box-shadow:none; padding:0; display:flex; align-items:center; justify-content:center;
   }
-  .kapo-coin .coin {
+  .kapo-coin .coin, .skip-coin .coin {
     width:3.6rem; height:3.6rem; border-radius:50%; display:flex; align-items:center;
     justify-content:center; font-family:var(--display); font-weight:700; font-size:.72rem;
     letter-spacing:.1em; color:var(--gold-bright);
-    background:radial-gradient(circle at 50% 35%, #7c1f1a, #4a0e0b);
     border:2px dashed var(--gold); box-shadow:0 3px 8px rgba(0,0,0,.5);
     transition:transform .12s, box-shadow .12s;
   }
-  .kapo-coin:hover { box-shadow:none; }
+  .kapo-coin .coin { background:radial-gradient(circle at 50% 35%, #7c1f1a, #4a0e0b); }
+  .skip-coin .coin { background:radial-gradient(circle at 50% 35%, #1e4c33, #0a241a); }
+  .kapo-coin:hover, .skip-coin:hover { box-shadow:none; }
   .kapo-coin:hover .coin { transform:translateY(-3px); box-shadow:0 0 16px rgba(192,57,43,.7); }
-  /* Skip shares the kapo slot (right of the discard); size it to the coin's
-     footprint so the pile row keeps the same height. */
-  .skip-btn { width:3.6rem; height:calc(var(--card-w) * 1.4); padding:0; font-size:.8rem; }
+  .skip-coin:hover .coin { transform:translateY(-3px); box-shadow:0 0 16px rgba(212,175,55,.5); }
 
   /* ---- Turn helpers, You pill, toasts ------------------------------- */
   .board-inner p { text-align:center; }
