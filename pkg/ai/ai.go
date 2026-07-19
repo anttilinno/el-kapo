@@ -18,6 +18,7 @@ const (
 	swapDrawnLowValue  = 4  // swap a low drawn card into an unknown slot below this value
 	swapOtherThreshold = 10 // blind-swap our worst known card away if it's at least this bad
 	peekOverSwapMargin = 4  // prefer scouting with a drawn 7/8 unless swapping it in saves this much
+	buildSetMinPoints  = 8  // only speculatively build a same-rank set out of cards this costly
 )
 
 // Turn plays one AI turn on g and returns narration lines for the CLI to
@@ -94,6 +95,15 @@ func Turn(g *game.Game, me int, rng *rand.Rand, names []string) []string {
 		return []string{fmt.Sprintf("swaps a drawn card into slot %d, discarding the %s", maxSlot+1, old)}
 	}
 
+	// Build toward a same-rank set even at a small cost now: two known Kings
+	// shed 26 points in one later multi-swap for a single low card. Only high
+	// cards, and only while the deck is deep enough to still draw that low card.
+	if slot, ok := buildTargetSlot(g, me, drawn); ok {
+		old := g.Hand(me)[slot]
+		_ = g.SwapDrawn(slot)
+		return []string{fmt.Sprintf("swaps a drawn card into slot %d to build a set, discarding the %s", slot+1, old)}
+	}
+
 	if slot, ok := firstUnknownSlot(g, me); ok && !scoutInstead && drawn.Points() <= swapDrawnLowValue {
 		old := g.Hand(me)[slot]
 		_ = g.SwapDrawn(slot)
@@ -152,11 +162,45 @@ func Turn(g *game.Game, me int, rng *rand.Rand, names []string) []string {
 // kapoThreshold scales boldness with deck depletion: early on an 8-point hand
 // is worth calling, late game the low cards are already scooped up.
 func kapoThreshold(g *game.Game) int {
-	initial := 52 - 4*g.NumPlayers()
-	if g.DeckLen()*2 > initial {
+	if deckDeep(g) {
 		return kapoThresholdEarly
 	}
 	return kapoThresholdLate
+}
+
+// deckDeep reports whether more than half the deck is still undrawn - the
+// window in which a speculative set is still likely to be cashed in.
+func deckDeep(g *game.Game) bool {
+	initial := 52 - 4*g.NumPlayers()
+	return g.DeckLen()*2 > initial
+}
+
+// buildTargetSlot decides whether to use an incoming high card to build or grow
+// a same-rank set, returning the unknown own slot to sacrifice for it. This is
+// speculative: it may cost a few points now (an unknown slot averages
+// unknownCardValue), betting on a later multi-swap that dumps the whole set for
+// one low card. J/Q are excluded so their discard powers aren't forfeited.
+func buildTargetSlot(g *game.Game, me int, inc game.Card) (int, bool) {
+	if inc.Points() < buildSetMinPoints || inc.Rank == game.Jack || inc.Rank == game.Queen {
+		return -1, false
+	}
+	if !deckDeep(g) {
+		return -1, false
+	}
+	// need a known own card of the same rank elsewhere to form/grow the set
+	haveMatch := false
+	for s := range g.Hand(me) {
+		if c, known := g.KnownCard(me, s); known && c.Rank == inc.Rank {
+			haveMatch = true
+			break
+		}
+	}
+	if !haveMatch {
+		return -1, false
+	}
+	// only ever sacrifice an unknown slot; overwriting a known-lower card to
+	// build would just raise our points with no offsetting shed.
+	return firstUnknownSlot(g, me)
 }
 
 func estimateHand(g *game.Game, me int) int {
