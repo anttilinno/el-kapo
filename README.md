@@ -16,8 +16,6 @@ go run ./cmd/el-kapo-web        # http://localhost:8080
 go run ./cmd/el-kapo
 ```
 
-A static landing page with a gameplay video lives in [`landing/`](landing/).
-
 ## Rules
 
 - 52-card deck: A–Q in all four suits, plus 2 Kings and 2 Jokers.
