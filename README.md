@@ -4,6 +4,8 @@ A card game of memory and bluffing. You've only seen half your own hand — keep
 
 Play in the browser against bots or friends (shared table code), or in the terminal.
 
+![Gameplay: table setup, power plays, and a KAPO call](gameplay.gif)
+
 ## Run
 
 ```sh
