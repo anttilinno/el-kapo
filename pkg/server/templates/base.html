@@ -710,6 +710,9 @@ runMotion();
       padding:1rem .8rem 1.2rem;
     }
     .pos-left .hand, .pos-right .hand { flex-direction:row; }
+    /* Keep the Kapo/Skip coin in flow on narrow screens - absolute would
+       spill it past the felt's right edge. */
+    .center-strip > .pile:last-child { position:static; margin-left:0; }
     #cheat-panel {
       left:0; right:0; bottom:0; width:100%; max-width:none;
       border-radius:16px 16px 0 0;
