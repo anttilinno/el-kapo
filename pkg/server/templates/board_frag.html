@@ -160,11 +160,17 @@
         <span class="pile-label">Discard</span>
         {{if .PowerPreview}}<span class="power-preview">{{.PowerPreview}}</span>{{end}}
       </div>
-      {{/* Always rendered so its width is reserved — otherwise the whole
+      {{/* Right of the discard: Call Kapo at turn start, Skip during a pending
+           action. Always rendered so its width is reserved — otherwise the
            center-strip re-centers and the piles jog sideways every turn. */}}
-      <div class="pile{{if not (and .MyTurn (eq .MyPhase "turnstart") (not .KapoActive))}} pile-reserved{{end}}">
-        <button type="button" class="kapo-coin" hx-post="/games/{{.TableID}}/move" hx-swap="none" hx-vals='{"action":"kapo"}' title="Call Kapo — lowest hand total wins the round"><span class="coin">KAPO</span></button>
-        <span class="pile-label">Call</span>
+      <div class="pile{{if not (and .MyTurn (or (and (eq .MyPhase "turnstart") (not .KapoActive)) (eq .MyPhase "action")))}} pile-reserved{{end}}">
+        {{if and .MyTurn (eq .MyPhase "action")}}
+          <button type="button" class="skip-btn" hx-post="/games/{{.TableID}}/move" hx-swap="none" hx-vals='{"action":"skip"}' title="Skip this action">Skip</button>
+          <span class="pile-label">Skip</span>
+        {{else}}
+          <button type="button" class="kapo-coin" hx-post="/games/{{.TableID}}/move" hx-swap="none" hx-vals='{"action":"kapo"}' title="Call Kapo — lowest hand total wins the round"><span class="coin">KAPO</span></button>
+          <span class="pile-label">Call</span>
+        {{end}}
       </div>
     </div>
 
@@ -182,12 +188,6 @@
   {{end}}
 
   {{if .Flash}}<div class="toast" role="status">{{.Flash}}</div>{{end}}
-
-  {{if and (eq .Phase "playing") .MyTurn (eq .MyPhase "action")}}
-    <div class="controls">
-      <button hx-post="/games/{{.TableID}}/move" hx-swap="none" hx-vals='{"action":"skip"}'>Skip</button>
-    </div>
-  {{end}}
 
   {{if eq .Phase "roundover"}}
     <h3>Round over &mdash; hands revealed</h3>

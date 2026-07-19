@@ -510,6 +510,9 @@ runMotion();
   }
   .kapo-coin:hover { box-shadow:none; }
   .kapo-coin:hover .coin { transform:translateY(-3px); box-shadow:0 0 16px rgba(192,57,43,.7); }
+  /* Skip shares the kapo slot (right of the discard); size it to the coin's
+     footprint so the pile row keeps the same height. */
+  .skip-btn { width:3.6rem; height:calc(var(--card-w) * 1.4); padding:0; font-size:.8rem; }
 
   /* ---- Turn helpers, You pill, toasts ------------------------------- */
   .board-inner p { text-align:center; }
