@@ -74,6 +74,13 @@ document.addEventListener('click', function (e) {
   if (slotEl) { resolveTarget(slotEl); return; }
 });
 
+// Double-click the drawn card to discard it outright (shortcut for clicking
+// the discard pile).
+document.addEventListener('dblclick', function (e) {
+  const armEl = e.target.closest('.armable[data-action="swap"]');
+  if (armEl) { resetInteraction(); commitDiscard({ dataset: { url: armEl.dataset.url } }); }
+});
+
 // Drag mirrors the click flow through the same armSource/resolveTarget: drag
 // the source onto a slot to swap immediately, or onto the discard pile to
 // throw it away. draggable is stamped on mousedown since re-renders wipe it.
