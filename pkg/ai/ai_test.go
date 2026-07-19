@@ -7,6 +7,48 @@ import (
 	"el-kapo/pkg/game"
 )
 
+// Repro: the AI called Kapo holding A, Q, Joker (13 points) because the Queen
+// slot was unknown and the optimistic planning estimate valued it at 7. The
+// kapo decision must be pessimistic about unseen slots, and never wrong about
+// a hand it fully knows.
+func TestKapoNotCalledOnUnknownHighSlot(t *testing.T) {
+	// fully-known 13-point hand: must not call kapo.
+	g := game.NewRound(2, rand.New(rand.NewSource(1)))
+	me := g.Current()
+	g.SeedForTest(
+		[]game.Card{{Rank: game.Ace, Suit: game.Clubs}, {Rank: game.Queen, Suit: game.Hearts}, {Rank: game.Joker, Suit: game.NoSuit}},
+		[]game.Card{{Rank: game.King, Suit: game.Spades}},
+	)
+	Turn(g, me, rand.New(rand.NewSource(1)), []string{"you", "AI"})
+	if g.KapoCaller() == me {
+		t.Fatal("AI called kapo on a known 13-point hand (A, Q, Joker)")
+	}
+
+	// an unknown slot must be valued more pessimistically for the kapo decision
+	// than for ordinary planning, so a mostly-unseen hand isn't gambled on.
+	g2 := game.NewRound(2, rand.New(rand.NewSource(2)))
+	me2 := g2.Current()
+	g2.MarkPeek(me2, 0) // one slot known, the rest unknown
+	if kapoEstimate(g2, me2) <= estimateHand(g2, me2) {
+		t.Fatalf("kapo estimate (%d) must exceed planning estimate (%d) with unknown slots",
+			kapoEstimate(g2, me2), estimateHand(g2, me2))
+	}
+}
+
+// Guard the other side: a fully-known genuinely low hand still calls Kapo.
+func TestKapoCalledWhenKnownLow(t *testing.T) {
+	g := game.NewRound(2, rand.New(rand.NewSource(1)))
+	me := g.Current()
+	g.SeedForTest(
+		[]game.Card{{Rank: game.Ace, Suit: game.Clubs}, {Rank: 2, Suit: game.Hearts}, {Rank: game.Joker, Suit: game.NoSuit}},
+		[]game.Card{{Rank: game.King, Suit: game.Spades}},
+	)
+	Turn(g, me, rand.New(rand.NewSource(1)), []string{"you", "AI"})
+	if g.KapoCaller() != me {
+		t.Fatal("AI failed to call kapo on a known 3-point hand (A, 2, Joker)")
+	}
+}
+
 func otherSuit(s game.Suit) game.Suit {
 	if s == game.Spades {
 		return game.Clubs

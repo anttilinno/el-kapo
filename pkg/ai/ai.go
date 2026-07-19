@@ -14,6 +14,7 @@ const (
 	kapoThresholdEarly = 8  // call kapo at or below this while deck >50% full
 	kapoThresholdLate  = 5  // tighter once <50% left: low cards are scooped, winning hands run lower
 	unknownCardValue   = 7  // assumed value of an unknown slot when estimating
+	kapoUnknownValue   = 10 // pessimistic value of an unknown slot for the kapo decision
 	takeDiscardMargin  = 1  // only take discard if it beats our target by more than this
 	swapDrawnLowValue  = 4  // swap a low drawn card into an unknown slot below this value
 	swapOtherThreshold = 10 // blind-swap our worst known card away if it's at least this bad
@@ -28,7 +29,7 @@ const (
 // slots it knows are the same rank, so its multi-swaps always succeed.
 // names are possessive display names indexed by player ("your", "AI-1's").
 func Turn(g *game.Game, me int, rng *rand.Rand, names []string) []string {
-	if estimateHand(g, me) <= kapoThreshold(g) && g.KapoCaller() == -1 {
+	if kapoEstimate(g, me) <= kapoThreshold(g) && g.KapoCaller() == -1 {
 		_ = g.CallKapo()
 		return []string{"calls Kapo!"}
 	}
@@ -204,12 +205,24 @@ func buildTargetSlot(g *game.Game, me int, inc game.Card) (int, bool) {
 }
 
 func estimateHand(g *game.Game, me int) int {
+	return handValue(g, me, unknownCardValue)
+}
+
+// kapoEstimate values the hand pessimistically for the kapo decision: an
+// unknown slot is assumed high, so the AI only calls kapo when confident from
+// cards it actually knows - it won't bet the win on an unseen slot that could
+// turn out to be a Queen or King.
+func kapoEstimate(g *game.Game, me int) int {
+	return handValue(g, me, kapoUnknownValue)
+}
+
+func handValue(g *game.Game, me, unknownVal int) int {
 	total := 0
 	for s := range g.Hand(me) {
 		if c, ok := g.KnownCard(me, s); ok {
 			total += c.Points()
 		} else {
-			total += unknownCardValue
+			total += unknownVal
 		}
 	}
 	return total
