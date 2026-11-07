@@ -281,6 +281,9 @@ runMotion();
   }
 
   * { box-sizing:border-box; }
+  /* Root size scales on big screens; all text and chrome is rem, so it grows
+     with the cards. The card height term subtracts its chrome in rem too. */
+  html { font-size:clamp(16px, min(.8vw, 1.5vh), 22px); }
   body {
     font-family:system-ui, sans-serif; color:#e8ead0; margin:0;
     padding:1.5rem 1rem 3rem; min-height:100vh;
